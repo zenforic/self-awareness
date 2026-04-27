@@ -109,12 +109,12 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 ## Git Workflow
 - **`main`** — Stable, tested releases. Only merge here after testing on `dev` is complete.
 - **`dev`** — Active development branch. All work is done here first.
+- **Note**: Git is already configured and ready for commits — no initial setup required.
 - **Workflow**:
   1. Create new feature/fix branches from `dev` (e.g., `git checkout dev && git checkout -b feature-name`)
   2. Make commits on the feature branch
   3. Test thoroughly on `dev`
   4. When ready, merge feature branch into `dev`, then merge `dev` into `main`
-  5. Push `main` and `dev` to remote
 - **Commit convention**: Use conventional commits (`fix:`, `feat:`, `refactor:`, `docs:`, `chore:`)
 
 ## Notes
