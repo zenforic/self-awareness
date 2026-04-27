@@ -70,11 +70,14 @@ fn run_ui(
     let mut page = Page::Main;
     let mut message: Option<String> = None;
     let mut message_timeout = std::time::Instant::now();
+    let mut confirm_restart: bool = false;
+    let mut restarting: bool = false;
+    let mut restart_start: Option<std::time::Instant> = None;
 
     loop {
         terminal.draw(|frame| {
             match page {
-                Page::Main => ui(frame, config, focused_field, editing, &edit_buffer, &message, &message_timeout),
+                Page::Main => ui(frame, config, focused_field, editing, &edit_buffer, &message, &message_timeout, confirm_restart, restarting, &restart_start),
                 Page::Tasks => tasks_ui(frame, config),
             }
         })?;
@@ -175,6 +178,33 @@ fn run_ui(
                     continue;
                 }
 
+                // --- RESTART CONFIRMATION: handle Y/N before other keys ---
+                if confirm_restart {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            // Confirm restart: stop daemon, regenerate cleanup, start daemon
+                            confirm_restart = false;
+                            restarting = true;
+                            restart_start = Some(std::time::Instant::now());
+
+                            // Stop the old daemon
+                            let _ = daemon::stop_daemon();
+
+                            // Regenerate cleanup.bat with current config
+                            let _ = cleanup::create_cleanup_task(config);
+
+                            // Give a moment for the old daemon to shut down
+                            std::thread::sleep(Duration::from_millis(500));
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                            // Cancel restart
+                            confirm_restart = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 // --- NAVIGATION MODE: only process navigation and action keys ---
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => {
@@ -183,8 +213,9 @@ fn run_ui(
                         return Ok(TuiAction::Quit);
                     }
                     KeyCode::Char('s') | KeyCode::Char('S') => {
-                        // Save config, stay in TUI
+                        // Save config, then ask to restart daemon
                         config.save()?;
+                        confirm_restart = true;
                     }
                     KeyCode::Char('d') | KeyCode::Char('D') => {
                         // Start daemon if not already running
@@ -275,6 +306,39 @@ fn run_ui(
                 }
             }
         }
+
+        // Check if restart wait period has elapsed
+        if restarting {
+            if let Some(start) = restart_start {
+                if start.elapsed() >= Duration::from_millis(500) {
+                    // Start the new daemon
+                    let exe_path = std::env::current_exe().unwrap();
+                    #[cfg(target_os = "windows")]
+                    let child = std::process::Command::new(&exe_path)
+                        .creation_flags(0x00000008) // DETACHED_PROCESS
+                        .spawn();
+                    #[cfg(not(target_os = "windows"))]
+                    let child = std::process::Command::new(&exe_path)
+                        .spawn();
+
+                    match child {
+                        Ok(_child) => {
+                            message = Some("Daemon restarted.".to_string());
+                            message_timeout = std::time::Instant::now();
+                            // Give the new daemon a moment to write its PID file
+                            std::thread::sleep(Duration::from_millis(300));
+                        }
+                        Err(e) => {
+                            message = Some(format!("Failed to restart daemon: {}", e));
+                            message_timeout = std::time::Instant::now();
+                        }
+                    }
+
+                    restarting = false;
+                    restart_start = None;
+                }
+            }
+        }
     }
 }
 
@@ -286,6 +350,9 @@ fn ui(
     edit_buffer: &str,
     message: &Option<String>,
     message_timeout: &std::time::Instant,
+    confirm_restart: bool,
+    restarting: bool,
+    _restart_start: &Option<std::time::Instant>,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -427,7 +494,9 @@ fn ui(
     let startup_enabled = startup::is_enabled().unwrap_or(false);
     let cleanup_enabled = cleanup::is_cleanup_task_enabled().unwrap_or(false);
 
-    let (daemon_label, daemon_color) = if daemon_running {
+    let (daemon_label, daemon_color) = if restarting {
+        ("Restarting...", Color::Yellow)
+    } else if daemon_running {
         ("Running", Color::Green)
     } else if pid_file_exists {
         ("Stopped (Died)", Color::Yellow)
@@ -470,7 +539,19 @@ fn ui(
     frame.render_widget(status, chunks[3]);
 
     // Buttons / help
-    let buttons_text = if editing {
+    let buttons_text = if confirm_restart {
+        Text::from(vec![
+            Line::from(vec![
+                Span::styled(" Restart daemon? [Y/N]  ", Style::default().fg(Color::Yellow)),
+            ]),
+        ])
+    } else if restarting {
+        Text::from(vec![
+            Line::from(vec![
+                Span::styled(" Restarting...  ", Style::default().fg(Color::Yellow)),
+            ]),
+        ])
+    } else if editing {
         Text::from(vec![
             Line::from(vec![
                 Span::styled(" [Enter] Save  ", Style::default().fg(Color::Yellow)),
@@ -529,7 +610,17 @@ fn apply_edit(config: &mut Config, field: usize, buffer: &str) {
             }
         }
         2 => {
-            config.output_dir = buffer.to_string();
+            // Convert relative paths to absolute
+            let path = std::path::Path::new(buffer);
+            if path.is_relative() {
+                if let Ok(cwd) = std::env::current_dir() {
+                    config.output_dir = cwd.join(path).to_string_lossy().to_string();
+                } else {
+                    config.output_dir = buffer.to_string();
+                }
+            } else {
+                config.output_dir = buffer.to_string();
+            }
         }
         3 => {
             // Cycle through formats

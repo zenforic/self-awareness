@@ -42,6 +42,7 @@ A stealth screen-logging daemon for monitoring PC access while away. Runs invisi
 - Console is hidden via `GetConsoleWindow` + `ShowWindow(SW_HIDE)` in daemon mode
 - Cleanup task uses `forfiles` to delete old images daily at 2 AM — independent of the daemon
 - `schtasks` is invoked directly (not via `cmd /C`) to avoid argument escaping issues
+- `cleanup.bat` is regenerated when config is saved and daemon is restarted, using absolute paths
 
 ## Building
 ```bash
@@ -107,6 +108,7 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 - **X**: Stops daemon only if running (no-op otherwise)
 - **D/X/C**: Stay in TUI after action (no save, no exit)
 - **Daemon messages**: Start/stop/status messages appear in the message area (below buttons) for 5 seconds instead of stderr
+- **Restart prompt**: After saving config with S, TUI asks "Restart daemon? [Y/N]" — Y stops old daemon, regenerates cleanup.bat, waits 500ms, starts new daemon; status shows "Restarting..." in yellow during the process; N or Esc cancels
 
 ## Files
 | File | Purpose |
@@ -135,3 +137,5 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 - Daemon is spawned from TUI with `DETACHED_PROCESS` flag so it runs independently of the TUI's console — exiting the TUI does not affect the daemon
 - Normal startup checks PID file first: if a valid daemon is running, launches TUI to manage it rather than trying to start a new daemon
 - Stale PID files (dead process) are cleaned up automatically; TUI shows "Stopped (Died)" so the user can restart with 'd'
+- **Daemon status** shows "Running" (green), "Restarting..." (yellow, during restart), "Stopped (Died)" (yellow), or "Stopped" (red)
+- **Relative paths** entered for output_dir are automatically converted to absolute paths on save
