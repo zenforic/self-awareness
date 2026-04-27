@@ -31,12 +31,28 @@ pub fn run(config: &Config) -> Result<()> {
 /// Stop the currently running daemon by reading its PID and terminating it.
 pub fn stop_daemon() -> Result<()> {
     let pid_path = config::daemon_pid_path();
+    let mut killed = false;
+
     if pid_path.exists() {
-        let pid_str = std::fs::read_to_string(&pid_path)?;
-        let pid: u32 = pid_str.trim().parse()?;
-        kill_process(pid)?;
+        if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                if is_process_running(pid) {
+                    if kill_process(pid).is_ok() {
+                        killed = true;
+                    }
+                }
+            }
+        }
+        // Always clean up the PID file, even if kill failed
         let _ = std::fs::remove_file(&pid_path);
     }
+
+    // Fallback: if we didn't kill via PID, try to kill by process name
+    // (handles cases where PID file was stale or missing)
+    if !killed {
+        let _ = kill_self_awareness_daemons();
+    }
+
     Ok(())
 }
 
@@ -115,6 +131,62 @@ fn log_message(msg: &str) {
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let entry = format!("[{}] {}\n", timestamp, msg);
     let _ = std::fs::write(&log_path, entry);
+}
+
+/// Kill all self-awareness.exe processes running as daemon (identified by --daemon flag).
+/// This is a fallback for when the PID file is stale or missing.
+/// Excludes the current process (the TUI) from being killed.
+#[cfg(target_os = "windows")]
+fn kill_self_awareness_daemons() -> Result<()> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let current_pid = std::process::id();
+    let snapshot = match unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) } {
+        Ok(h) => h,
+        Err(_) => return Ok(()),
+    };
+
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+    // First pass: find all self-awareness.exe PIDs
+    let mut targets: Vec<u32> = Vec::new();
+
+    let mut found = unsafe { Process32FirstW(snapshot, &mut entry) };
+    while found.is_ok() {
+        let exe_name = entry
+            .szExeFile
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8 as char)
+            .collect::<String>();
+
+        if exe_name.to_lowercase() == "self-awareness.exe" && entry.th32ProcessID != current_pid
+        {
+            targets.push(entry.th32ProcessID);
+        }
+
+        found = unsafe { Process32NextW(snapshot, &mut entry) };
+    }
+
+    // Second pass: kill each target
+    for pid in targets {
+        let _ = kill_process(pid);
+    }
+
+    // Close the snapshot handle
+    let _ = unsafe { CloseHandle(snapshot) };
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn kill_self_awareness_daemons() -> Result<()> {
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

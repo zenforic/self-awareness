@@ -63,12 +63,17 @@ fn acquire_daemon_mutex() -> bool {
 fn main() {
     let args: Vec<String> = env::args().collect();
     let tui_mode = args.iter().any(|a| a == "--tui" || a == "-t");
+    let daemon_mode = args.iter().any(|a| a == "--daemon" || a == "-d");
 
     // Ensure app directory exists
     let app_dir = config::app_dir();
     let _ = std::fs::create_dir_all(&app_dir);
 
-    if tui_mode {
+    if daemon_mode {
+        // Explicit daemon mode — run as daemon directly (no mutex check needed)
+        hide_console();
+        run_daemon_application();
+    } else if tui_mode {
         // Always show TUI when requested
         run_tui_application();
     } else {

@@ -14,6 +14,8 @@ use ratatui::{
 };
 use std::io;
 use std::time::Duration;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 use crate::config::{Config, ImageFormat};
 use crate::daemon;
@@ -187,9 +189,18 @@ fn run_ui(
                         if daemon::is_daemon_running() {
                             eprintln!("Daemon is already running.");
                         } else {
-                            match std::process::Command::new(std::env::current_exe().unwrap())
-                                .spawn()
-                            {
+                            let exe_path = std::env::current_exe().unwrap();
+                            #[cfg(target_os = "windows")]
+                            let child = std::process::Command::new(&exe_path)
+                                .arg("--daemon")
+                                .creation_flags(0x00000008) // DETACHED_PROCESS — not attached to TUI console
+                                .spawn();
+                            #[cfg(not(target_os = "windows"))]
+                            let child = std::process::Command::new(&exe_path)
+                                .arg("--daemon")
+                                .spawn();
+
+                            match child {
                                 Ok(_child) => {
                                     eprintln!("Daemon started.");
                                     // Give the new daemon a moment to write its PID file
@@ -204,8 +215,10 @@ fn run_ui(
                     KeyCode::Char('x') | KeyCode::Char('X') => {
                         // Stop daemon, stay in TUI (no save)
                         if daemon::is_daemon_running() {
-                            let _ = daemon::stop_daemon();
-                            eprintln!("Daemon stopped.");
+                            match daemon::stop_daemon() {
+                                Ok(()) => eprintln!("Daemon stopped."),
+                                Err(e) => eprintln!("Daemon stop error: {}", e),
+                            }
                         } else {
                             eprintln!("No daemon is running.");
                         }
