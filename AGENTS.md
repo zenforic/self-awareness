@@ -19,6 +19,7 @@ A stealth screen-logging daemon for monitoring PC access while away. Runs invisi
 |---|---|
 | `self-awareness.exe` | Daemon mode (if no other instance running), else shows TUI |
 | `self-awareness.exe --tui` | Always shows TUI |
+| `self-awareness.exe --daemon` | Always runs as daemon (detached from console, bypasses mutex check) |
 
 ### Stealth Features
 - Console window hidden via `GetConsoleWindow` + `ShowWindow(SW_HIDE)` in daemon mode
@@ -105,7 +106,19 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 | `%APPDATA%\self-awareness\cleanup.bat` | Cleanup batch script |
 | Windows Task Scheduler | `SelfAwarenessStartup` and `SelfAwarenessCleanup` tasks |
 
+## Git Workflow
+- **`main`** — Stable, tested releases. Only merge here after testing on `dev` is complete.
+- **`dev`** — Active development branch. All work is done here first.
+- **Workflow**:
+  1. Create new feature/fix branches from `dev` (e.g., `git checkout dev && git checkout -b feature-name`)
+  2. Make commits on the feature branch
+  3. Test thoroughly on `dev`
+  4. When ready, merge feature branch into `dev`, then merge `dev` into `main`
+  5. Push `main` and `dev` to remote
+- **Commit convention**: Use conventional commits (`fix:`, `feat:`, `refactor:`, `docs:`, `chore:`)
+
 ## Notes
 - The `screenshot` crate was initially planned but requires nightly Rust — replaced with direct GDI BitBlt via the `windows` crate
 - WebP encoding uses `image` crate's built-in codec (lossy at 95% quality for small file sizes)
 - The release profile enables LTO, stripping, and max optimization
+- Daemon is spawned from TUI with `DETACHED_PROCESS` flag so it runs independently of the TUI's console — exiting the TUI does not affect the daemon
