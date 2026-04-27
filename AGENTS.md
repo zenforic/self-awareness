@@ -37,9 +37,11 @@ A stealth screen-logging daemon for monitoring PC access while away. Runs invisi
 - GDI BitBlt screen capture (no nightly Rust, no external dependencies)
 
 ### Startup Persistence
-- Uses Windows Task Scheduler (`schtasks`) to create a task that runs the program at logon
-- Program detects it's running as daemon (no mutex contention, no TUI flag) and runs silently
+- Uses Windows Task Scheduler (`schtasks /Create`) to create `SelfAwarenessStartup` task at logon
+- Task runs `self-awareness.exe --daemon` (bypasses mutex check for reliable startup)
+- Console is hidden via `GetConsoleWindow` + `ShowWindow(SW_HIDE)` in daemon mode
 - Cleanup task uses `forfiles` to delete old images daily at 2 AM — independent of the daemon
+- `schtasks` is invoked directly (not via `cmd /C`) to avoid argument escaping issues
 
 ## Building
 ```bash

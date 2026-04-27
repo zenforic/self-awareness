@@ -6,15 +6,17 @@ pub fn enable_startup() -> Result<()> {
     let exe_path = std::env::current_exe()?.to_string_lossy().to_string();
     let task_name = "SelfAwarenessStartup";
 
-    // Use schtasks to create a task that runs at logon
-    // The program itself hides its console in daemon mode
-    let command = format!(
-        "schtasks /Create /TN \"{}\" /TR \"\\\"{}\\\"\" /SC ONLOGON /RL HIGHEST /F",
-        task_name, exe_path
-    );
-
-    let output = std::process::Command::new("cmd")
-        .args(&["/C", &command])
+    // Create task via schtasks directly (not through cmd /C to avoid escaping issues)
+    // Pass --daemon so the startup execution bypasses mutex check and always runs as daemon
+    let output = std::process::Command::new("schtasks")
+        .args(&[
+            "/Create",
+            "/TN", task_name,
+            "/TR", &format!("\"{}\" --daemon", exe_path),
+            "/SC", "ONLOGON",
+            "/RL", "HIGHEST",
+            "/F",
+        ])
         .output()?;
 
     if !output.status.success() {
@@ -29,10 +31,8 @@ pub fn enable_startup() -> Result<()> {
 pub fn disable_startup() -> Result<()> {
     let task_name = "SelfAwarenessStartup";
 
-    let command = format!("schtasks /Delete /TN \"{}\" /F", task_name);
-
-    let output = std::process::Command::new("cmd")
-        .args(&["/C", &command])
+    let output = std::process::Command::new("schtasks")
+        .args(&["/Delete", "/TN", task_name, "/F"])
         .output()?;
 
     if !output.status.success() {
