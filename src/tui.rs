@@ -9,24 +9,29 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Row, Table},
     Terminal,
 };
 use std::io;
 use std::time::Duration;
 
-use crate::config::{self, Config, ImageFormat};
+use crate::config::{Config, ImageFormat};
 use crate::daemon;
 use crate::startup;
 use crate::cleanup;
 
+/// Which page the TUI is currently showing.
+#[derive(Debug, PartialEq)]
+enum Page {
+    Main,
+    Tasks,
+}
+
 /// Action returned by the TUI after the user exits.
 #[derive(Debug, PartialEq)]
 pub enum TuiAction {
-    Quit,
-    StartDaemon,
-    StopDaemon,
-    Save,
+    Quit,            // Q: stop daemon and exit
+    QuitNoStop,      // Esc: exit without stopping daemon
 }
 
 /// Run the TUI for configuring the self-awareness monitor.
@@ -60,88 +65,190 @@ fn run_ui(
     let mut focused_field: usize = 0;
     let mut editing = false;
     let mut edit_buffer = String::new();
+    let mut page = Page::Main;
 
     loop {
-        terminal.draw(|frame| ui(frame, config, focused_field, editing, &edit_buffer))?;
+        terminal.draw(|frame| {
+            match page {
+                Page::Main => ui(frame, config, focused_field, editing, &edit_buffer),
+                Page::Tasks => tasks_ui(frame, config),
+            }
+        })?;
 
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+
+                // --- TASKS PAGE ---
+                if page == Page::Tasks {
                     match key.code {
-                        KeyCode::Char('q') | KeyCode::Char('Q') => {
-                            return Ok(TuiAction::Quit);
+                        KeyCode::Esc => {
+                            page = Page::Main;
+                        }
+                        KeyCode::Char('t') | KeyCode::Char('T') => {
+                            // Toggle tasks page
+                            page = Page::Main;
                         }
                         KeyCode::Char('s') | KeyCode::Char('S') => {
-                            config.save()?;
-                            return Ok(TuiAction::Save);
-                        }
-                        KeyCode::Char('d') | KeyCode::Char('D') => {
-                            // Start daemon
-                            config.save()?;
-                            return Ok(TuiAction::StartDaemon);
-                        }
-                        KeyCode::Char('x') | KeyCode::Char('X') => {
-                            // Stop daemon
-                            config.save()?;
-                            return Ok(TuiAction::StopDaemon);
+                            // Toggle startup task
+                            if startup::is_enabled().unwrap_or(false) {
+                                let _ = startup::disable_startup();
+                            } else {
+                                let _ = startup::enable_startup();
+                            }
                         }
                         KeyCode::Char('c') | KeyCode::Char('C') => {
-                            // Toggle startup
-                            config.start_on_boot = !config.start_on_boot;
+                            // Toggle cleanup task
+                            if cleanup::is_cleanup_task_enabled().unwrap_or(false) {
+                                let _ = cleanup::remove_cleanup_task();
+                            } else {
+                                let _ = cleanup::create_cleanup_task(config);
+                            }
+                        }
+                        KeyCode::Char('a') | KeyCode::Char('A') => {
+                            // Clear ALL tasks
+                            let _ = startup::disable_startup();
+                            let _ = cleanup::remove_cleanup_task();
+                        }
+                        KeyCode::Char('q') | KeyCode::Char('Q') => {
+                            let _ = daemon::stop_daemon();
+                            return Ok(TuiAction::Quit);
+                        }
+                        KeyCode::Char('e') | KeyCode::Char('E') => {
+                            // Exit without stopping daemon
+                            return Ok(TuiAction::QuitNoStop);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // --- EDIT MODE: only process editing keys ---
+                if editing {
+                    match key.code {
+                        KeyCode::Enter => {
+                            apply_edit(config, focused_field, &edit_buffer);
+                            editing = false;
                         }
                         KeyCode::Esc => {
-                            if editing {
-                                editing = false;
-                            } else {
-                                return Ok(TuiAction::Quit);
-                            }
+                            // Cancel edit, go back to navigation
+                            editing = false;
+                        }
+                        KeyCode::Backspace => {
+                            edit_buffer.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            edit_buffer.push(c);
                         }
                         KeyCode::Tab => {
-                            if editing {
-                                editing = false;
-                            } else {
-                                focused_field = (focused_field + 1) % 5;
-                            }
+                            // In edit mode, Tab moves to next field and starts editing it
+                            focused_field = (focused_field + 1) % 5;
+                            edit_buffer = match focused_field {
+                                0 => config.interval_seconds.to_string(),
+                                1 => config.max_disk_mb.to_string(),
+                                2 => config.output_dir.clone(),
+                                3 => config.image_format.label().to_string(),
+                                4 => config.retention_days.to_string(),
+                                _ => String::new(),
+                            };
                         }
                         KeyCode::BackTab => {
-                            if editing {
-                                editing = false;
-                            } else {
-                                focused_field = if focused_field == 0 { 4 } else { focused_field - 1 };
-                            }
+                            // In edit mode, BackTab moves to previous field and starts editing it
+                            focused_field = if focused_field == 0 { 4 } else { focused_field - 1 };
+                            edit_buffer = match focused_field {
+                                0 => config.interval_seconds.to_string(),
+                                1 => config.max_disk_mb.to_string(),
+                                2 => config.output_dir.clone(),
+                                3 => config.image_format.label().to_string(),
+                                4 => config.retention_days.to_string(),
+                                _ => String::new(),
+                            };
                         }
-                        KeyCode::Enter => {
-                            if editing {
-                                apply_edit(config, focused_field, &edit_buffer);
-                                editing = false;
-                            } else {
-                                editing = true;
-                                edit_buffer = match focused_field {
-                                    0 => config.interval_seconds.to_string(),
-                                    1 => config.max_disk_mb.to_string(),
-                                    2 => config.output_dir.clone(),
-                                    3 => config.image_format.label().to_string(),
-                                    4 => config.retention_days.to_string(),
-                                    _ => String::new(),
-                                };
-                            }
-                        }
-                        _ => {
-                            if editing {
-                                match key.code {
-                                    KeyCode::Char(c) => edit_buffer.push(c),
-                                    KeyCode::Backspace => {
-                                        edit_buffer.pop();
-                                    }
-                                    KeyCode::Enter => {
-                                        apply_edit(config, focused_field, &edit_buffer);
-                                        editing = false;
-                                    }
-                                    _ => {}
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // --- NAVIGATION MODE: only process navigation and action keys ---
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Char('Q') => {
+                        // Quit: stop daemon, then exit
+                        let _ = daemon::stop_daemon();
+                        return Ok(TuiAction::Quit);
+                    }
+                    KeyCode::Char('s') | KeyCode::Char('S') => {
+                        // Save config, stay in TUI
+                        config.save()?;
+                    }
+                    KeyCode::Char('d') | KeyCode::Char('D') => {
+                        // Start daemon if not already running
+                        if daemon::is_daemon_running() {
+                            eprintln!("Daemon is already running.");
+                        } else {
+                            match std::process::Command::new(std::env::current_exe().unwrap())
+                                .spawn()
+                            {
+                                Ok(_child) => {
+                                    eprintln!("Daemon started.");
+                                    // Give the new daemon a moment to write its PID file
+                                    std::thread::sleep(Duration::from_millis(300));
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to start daemon: {}", e);
                                 }
                             }
                         }
                     }
+                    KeyCode::Char('x') | KeyCode::Char('X') => {
+                        // Stop daemon, stay in TUI (no save)
+                        if daemon::is_daemon_running() {
+                            let _ = daemon::stop_daemon();
+                            eprintln!("Daemon stopped.");
+                        } else {
+                            eprintln!("No daemon is running.");
+                        }
+                    }
+                    KeyCode::Char('c') | KeyCode::Char('C') => {
+                        // Toggle startup persistence (no save)
+                        config.start_on_boot = !config.start_on_boot;
+                        // Update the actual Task Scheduler tasks immediately
+                        if config.start_on_boot {
+                            let _ = startup::enable_startup();
+                            let _ = cleanup::create_cleanup_task(config);
+                        } else {
+                            let _ = startup::disable_startup();
+                            let _ = cleanup::remove_cleanup_task();
+                        }
+                    }
+                    KeyCode::Char('t') | KeyCode::Char('T') => {
+                        // Switch to tasks page
+                        page = Page::Tasks;
+                    }
+                    KeyCode::Enter => {
+                        // Start editing the focused field
+                        editing = true;
+                        edit_buffer = match focused_field {
+                            0 => config.interval_seconds.to_string(),
+                            1 => config.max_disk_mb.to_string(),
+                            2 => config.output_dir.clone(),
+                            3 => config.image_format.label().to_string(),
+                            4 => config.retention_days.to_string(),
+                            _ => String::new(),
+                        };
+                    }
+                    KeyCode::Esc => {
+                        // Just close TUI, don't stop daemon, don't save
+                        return Ok(TuiAction::QuitNoStop);
+                    }
+                    KeyCode::Tab => {
+                        focused_field = (focused_field + 1) % 5;
+                    }
+                    KeyCode::BackTab => {
+                        focused_field = if focused_field == 0 { 4 } else { focused_field - 1 };
+                    }
+                    _ => {}
                 }
             }
         }
@@ -153,7 +260,7 @@ fn ui(
     config: &Config,
     focused_field: usize,
     editing: bool,
-    _edit_buffer: &str,
+    edit_buffer: &str,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -174,54 +281,101 @@ fn ui(
     frame.render_widget(title, chunks[0]);
 
     // Settings panel
-    let focused_style = if editing {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
+    let focused_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let editing_style = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
     let normal_style = Style::default();
+
+    // Determine the display value for the focused field
+    let field_values: Vec<String> = vec![
+        if focused_field == 0 && editing {
+            format!("{}s [{}]", config.interval_seconds, edit_buffer)
+        } else {
+            format!("{}s", config.interval_seconds)
+        },
+        if focused_field == 1 && editing {
+            format!("{} MB [{}]", config.max_disk_mb, edit_buffer)
+        } else {
+            format!("{} MB", config.max_disk_mb)
+        },
+        if focused_field == 2 && editing {
+            format!("[{}]", edit_buffer)
+        } else {
+            config.output_dir.clone()
+        },
+        if focused_field == 3 && editing {
+            // Show current format, cycling on Enter
+            config.image_format.label().to_string()
+        } else {
+            config.image_format.label().to_string()
+        },
+        if focused_field == 4 && editing {
+            format!("{} days [{}]", config.retention_days, edit_buffer)
+        } else {
+            format!("{} days", config.retention_days)
+        },
+    ];
 
     let settings_text = Text::from(vec![
         Line::from(vec![
             Span::styled("  Interval:    ", normal_style),
             Span::styled(
-                format!("{}s", config.interval_seconds),
-                if focused_field == 0 { focused_style } else { normal_style },
+                &field_values[0],
+                if focused_field == 0 {
+                    if editing { editing_style } else { focused_style }
+                } else {
+                    normal_style
+                },
             ),
         ]),
         Line::from(vec![
             Span::styled("  Max Disk:    ", normal_style),
             Span::styled(
-                format!("{} MB", config.max_disk_mb),
-                if focused_field == 1 { focused_style } else { normal_style },
+                &field_values[1],
+                if focused_field == 1 {
+                    if editing { editing_style } else { focused_style }
+                } else {
+                    normal_style
+                },
             ),
         ]),
         Line::from(vec![
             Span::styled("  Output Dir:  ", normal_style),
             Span::styled(
-                config.output_dir.as_str(),
-                if focused_field == 2 { focused_style } else { normal_style },
+                &field_values[2],
+                if focused_field == 2 {
+                    if editing { editing_style } else { focused_style }
+                } else {
+                    normal_style
+                },
             ),
         ]),
         Line::from(vec![
             Span::styled("  Image Format:", normal_style),
             Span::styled(
-                config.image_format.label(),
-                if focused_field == 3 { focused_style } else { normal_style },
+                &field_values[3],
+                if focused_field == 3 {
+                    if editing { editing_style } else { focused_style }
+                } else {
+                    normal_style
+                },
             ),
         ]),
         Line::from(vec![
             Span::styled("  Retention:   ", normal_style),
             Span::styled(
-                format!("{} days", config.retention_days),
-                if focused_field == 4 { focused_style } else { normal_style },
+                &field_values[4],
+                if focused_field == 4 {
+                    if editing { editing_style } else { focused_style }
+                } else {
+                    normal_style
+                },
             ),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("  Disk Usage:  ", normal_style),
             Span::styled(
-                format_usage(config::app_dir().join(&config.output_dir)),
+                format_usage(&config.output_dir),
                 normal_style,
             ),
         ]),
@@ -287,23 +441,39 @@ fn ui(
         .block(Block::default().borders(Borders::ALL).title(" Status "));
     frame.render_widget(status, chunks[3]);
 
-    // Buttons
-    let buttons_text = Text::from(vec![
-        Line::from(vec![
-            Span::styled(" [S]ave Config  ", normal_style),
-            Span::styled(" [D]aemon  ", normal_style),
-            Span::styled(" [X] Stop  ", normal_style),
-            Span::styled(" [C] Boot  ", normal_style),
-            Span::styled(" [Q]uit  ", normal_style),
-        ]),
-    ]);
+    // Buttons / help
+    let buttons_text = if editing {
+        Text::from(vec![
+            Line::from(vec![
+                Span::styled(" [Enter] Save  ", Style::default().fg(Color::Yellow)),
+                Span::styled(" [Esc] Cancel  ", Style::default().fg(Color::Yellow)),
+                Span::styled(" [Tab] Next  ", Style::default().fg(Color::Yellow)),
+            ]),
+        ])
+    } else {
+        Text::from(vec![
+            Line::from(vec![
+                Span::styled(" [S]ave Config  ", normal_style),
+                Span::styled(" [D]aemon  ", normal_style),
+                Span::styled(" [X] Stop  ", normal_style),
+                Span::styled(" [C] Boot  ", normal_style),
+                Span::styled(" [T]asks  ", normal_style),
+                Span::styled(" [Q]uit  ", normal_style),
+            ]),
+        ])
+    };
     let buttons = Paragraph::new(buttons_text)
         .block(Block::default().borders(Borders::ALL).title(" Actions "));
     frame.render_widget(buttons, chunks[4]);
 
     // Help
-    let help = Paragraph::new(" Tab/Shift+Tab: Navigate | Enter: Edit | Esc: Cancel/Quit")
-        .style(Style::default().fg(Color::DarkGray));
+    let help = if editing {
+        Paragraph::new(" Enter: Confirm | Esc: Cancel | Tab: Next field")
+            .style(Style::default().fg(Color::DarkGray))
+    } else {
+        Paragraph::new(" Tab/Shift+Tab: Navigate | Enter: Edit | Esc: Quit")
+            .style(Style::default().fg(Color::DarkGray))
+    };
     frame.render_widget(help, chunks[5]);
 }
 
@@ -338,15 +508,16 @@ fn apply_edit(config: &mut Config, field: usize, buffer: &str) {
     }
 }
 
-fn format_usage(dir: std::path::PathBuf) -> String {
-    if !dir.exists() {
-        return "0 B".to_string();
+fn format_usage(dir: &str) -> String {
+    let path = std::path::Path::new(dir);
+    if !path.exists() {
+        return "N/A (dir does not exist)".to_string();
     }
 
     let mut total: u64 = 0;
     let mut count: u64 = 0;
 
-    if let Ok(entries) = std::fs::read_dir(&dir) {
+    if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
@@ -363,11 +534,87 @@ fn format_usage(dir: std::path::PathBuf) -> String {
         }
     }
 
-    if total < 1024 {
+    if count == 0 {
+        "0 files".to_string()
+    } else if total < 1024 {
         format!("{} files, {} B", count, total)
     } else if total < 1024 * 1024 {
         format!("{} files, {:.1} KB", count, total as f64 / 1024.0)
     } else {
         format!("{} files, {:.1} MB", count, total as f64 / (1024.0 * 1024.0))
     }
+}
+
+/// Render the scheduled tasks management page.
+fn tasks_ui(frame: &mut ratatui::Frame, _config: &Config) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),   // Title
+            Constraint::Length(1),   // Spacer
+            Constraint::Length(11),  // Tasks table
+            Constraint::Length(1),   // Spacer
+            Constraint::Length(5),   // Actions
+            Constraint::Length(2),   // Help
+        ])
+        .split(frame.area());
+
+    // Title
+    let title = Paragraph::new(" Scheduled Tasks ")
+        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(title, chunks[0]);
+
+    // Build task rows
+    let startup_enabled = startup::is_enabled().unwrap_or(false);
+    let cleanup_enabled = cleanup::is_cleanup_task_enabled().unwrap_or(false);
+
+    let rows = vec![
+        Row::new(vec![
+            "SelfAwarenessStartup".to_string(),
+            if startup_enabled { "Enabled".to_string() } else { "Disabled".to_string() },
+            "Runs at logon".to_string(),
+        ]),
+        Row::new(vec![
+            "SelfAwarenessCleanup".to_string(),
+            if cleanup_enabled { "Enabled".to_string() } else { "Disabled".to_string() },
+            "Daily at 02:00".to_string(),
+        ]),
+    ];
+
+    let task_table = Table::new(
+        rows,
+        [Constraint::Percentage(35), Constraint::Percentage(25), Constraint::Percentage(40)],
+    )
+    .header(
+        Row::new(vec![
+            Span::styled("  Task Name", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("  Status", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("  Schedule", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ])
+    )
+    .block(Block::default().borders(Borders::ALL).title(" Task List "));
+    frame.render_widget(task_table, chunks[2]);
+
+    // Actions
+    let actions_text = Text::from(vec![
+        Line::from(vec![
+            Span::styled(" [S]tartup  ", Style::default().fg(Color::Yellow)),
+            Span::styled(" [C]leanup  ", Style::default().fg(Color::Yellow)),
+            Span::styled(" [A]ll Clear  ", Style::default().fg(Color::Yellow)),
+        ]),
+        Line::from(vec![
+            Span::styled(" [T]ab Back  ", Style::default().fg(Color::Yellow)),
+            Span::styled(" [Q]uit  ", Style::default().fg(Color::Yellow)),
+            Span::styled(" [E]xit  ", Style::default().fg(Color::Yellow)),
+        ]),
+    ]);
+    let actions = Paragraph::new(actions_text)
+        .block(Block::default().borders(Borders::ALL).title(" Controls "));
+    frame.render_widget(actions, chunks[4]);
+
+    // Help
+    let help = Paragraph::new(" Esc/T: Back to main | S: Toggle startup | C: Toggle cleanup | A: Clear all")
+        .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(help, chunks[5]);
 }

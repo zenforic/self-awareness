@@ -87,12 +87,14 @@ fn capture_screen() -> Result<(Vec<u8>, u32, u32)> {
         )?;
 
         // Get bitmap bits (BGRA format from Windows)
+        // Use negative height to get top-down bitmap (matches BitBlt capture)
+        // Positive height would give bottom-up, causing a vertical flip
         let mut bmi: windows::Win32::Graphics::Gdi::BITMAPINFO =
             std::mem::zeroed();
         bmi.bmiHeader.biSize =
             std::mem::size_of::<windows::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
         bmi.bmiHeader.biWidth = width as i32;
-        bmi.bmiHeader.biHeight = height as i32;
+        bmi.bmiHeader.biHeight = -(height as i32); // negative = top-down
         bmi.bmiHeader.biPlanes = 1;
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = 0; // BI_RGB

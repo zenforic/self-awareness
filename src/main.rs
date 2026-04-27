@@ -104,64 +104,11 @@ fn run_tui_application() {
 
         match action {
             tui::TuiAction::Quit => {
-                let _ = config.save();
+                // Q: daemon already stopped by TUI, just exit
                 break;
             }
-            tui::TuiAction::Save => {
-                let _ = config.save();
-            }
-            tui::TuiAction::StartDaemon => {
-                let _ = config.save();
-
-                // Manage startup persistence
-                if config.start_on_boot {
-                    let _ = startup::enable_startup();
-                } else {
-                    let _ = startup::disable_startup();
-                }
-
-                // Manage cleanup task
-                if config.start_on_boot {
-                    let _ = cleanup::create_cleanup_task(&config);
-                } else {
-                    let _ = cleanup::remove_cleanup_task();
-                }
-
-                // Spawn daemon as a new process
-                match std::process::Command::new(std::env::current_exe().unwrap())
-                    .spawn()
-                {
-                    Ok(child) => {
-                        eprintln!("Daemon started (PID: {})", child.id());
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to start daemon: {}", e);
-                    }
-                }
-
-                break;
-            }
-            tui::TuiAction::StopDaemon => {
-                let _ = config.save();
-
-                // Stop the daemon process
-                let _ = daemon::stop_daemon();
-
-                // Manage startup persistence
-                if config.start_on_boot {
-                    let _ = startup::enable_startup();
-                } else {
-                    let _ = startup::disable_startup();
-                }
-
-                // Manage cleanup task
-                if config.start_on_boot {
-                    let _ = cleanup::create_cleanup_task(&config);
-                } else {
-                    let _ = cleanup::remove_cleanup_task();
-                }
-
-                eprintln!("Daemon stopped.");
+            tui::TuiAction::QuitNoStop => {
+                // Esc: daemon still running, just exit
                 break;
             }
         }

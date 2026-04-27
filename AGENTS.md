@@ -64,14 +64,37 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 ## TUI Controls
 | Key | Action |
 |---|---|
-| Tab / Shift+Tab | Navigate fields |
-| Enter | Edit current field |
-| Esc | Cancel edit / Quit |
-| S | Save config |
-| D | Start daemon |
-| X | Stop daemon |
-| C | Toggle startup persistence |
-| Q | Quit |
+| Tab / Shift+Tab | Navigate fields (or next/prev field while editing) |
+| Enter | Edit current field / Confirm edit |
+| Esc | Cancel edit / Quit (without stopping daemon) |
+| S | Save config (settings take effect only after save) |
+| D | Start daemon (stays in TUI, does not auto-save) |
+| X | Stop daemon (stays in TUI, does not auto-save) |
+| C | Toggle startup persistence (stays in TUI, does not auto-save) |
+| T | Switch to Tasks page |
+| Q | Quit (stops daemon and exits) |
+| E | Exit TUI (keeps daemon running) |
+
+### Tasks Page (T key to enter, Esc/T to return)
+| Key | Action |
+|---|---|
+| S | Toggle SelfAwarenessStartup task |
+| C | Toggle SelfAwarenessCleanup task |
+| A | Clear ALL tasks (disable both) |
+| T / Esc | Back to main page |
+| Q | Quit (stops daemon and exits) |
+| E | Exit (keeps daemon running) |
+
+### Key behaviors
+- **Focused field always highlighted**: Yellow for selected, green while editing
+- **Live editing**: Changes appear in the display as you type; only applied on Enter
+- **Settings not auto-saved**: D, X, C, Q, and Esc do not save — only S saves
+- **Commands blocked during edit**: While editing a field, only Enter/Esc/Tab/Backspace/chars work
+- **Esc**: Cancels edit if editing; quits TUI without stopping the daemon if not editing
+- **Q**: Stops daemon (if running) and exits TUI
+- **D**: Starts daemon only if not already running (prevents multiple instances)
+- **X**: Stops daemon only if running (no-op otherwise)
+- **D/X/C**: Stay in TUI after action (no save, no exit)
 
 ## Files
 | File | Purpose |
