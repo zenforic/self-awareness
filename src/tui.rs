@@ -17,7 +17,7 @@ use std::time::Duration;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-use crate::config::{Config, ImageFormat};
+use crate::config::{self, Config, ImageFormat};
 use crate::daemon;
 use crate::startup;
 use crate::cleanup;
@@ -37,7 +37,8 @@ pub enum TuiAction {
 }
 
 /// Run the TUI for configuring the self-awareness monitor.
-pub fn run_tui(config: &mut Config) -> Result<TuiAction> {
+/// `reattached` is true when the TUI is launched because a daemon is already running.
+pub fn run_tui(config: &mut Config, reattached: bool) -> Result<TuiAction> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -46,7 +47,7 @@ pub fn run_tui(config: &mut Config) -> Result<TuiAction> {
     let mut terminal = Terminal::new(backend)?;
 
     // Run TUI loop
-    let result = run_ui(&mut terminal, config);
+    let result = run_ui(&mut terminal, config, reattached);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -63,16 +64,19 @@ pub fn run_tui(config: &mut Config) -> Result<TuiAction> {
 fn run_ui(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
+    reattached: bool,
 ) -> Result<TuiAction> {
     let mut focused_field: usize = 0;
     let mut editing = false;
     let mut edit_buffer = String::new();
     let mut page = Page::Main;
+    let mut message: Option<String> = None;
+    let mut message_timeout = std::time::Instant::now();
 
     loop {
         terminal.draw(|frame| {
             match page {
-                Page::Main => ui(frame, config, focused_field, editing, &edit_buffer),
+                Page::Main => ui(frame, config, focused_field, editing, &edit_buffer, reattached, &message, &message_timeout),
                 Page::Tasks => tasks_ui(frame, config),
             }
         })?;
@@ -187,27 +191,28 @@ fn run_ui(
                     KeyCode::Char('d') | KeyCode::Char('D') => {
                         // Start daemon if not already running
                         if daemon::is_daemon_running() {
-                            eprintln!("Daemon is already running.");
+                            message = Some("Daemon is already running.".to_string());
+                            message_timeout = std::time::Instant::now();
                         } else {
                             let exe_path = std::env::current_exe().unwrap();
                             #[cfg(target_os = "windows")]
                             let child = std::process::Command::new(&exe_path)
-                                .arg("--daemon")
                                 .creation_flags(0x00000008) // DETACHED_PROCESS — not attached to TUI console
                                 .spawn();
                             #[cfg(not(target_os = "windows"))]
                             let child = std::process::Command::new(&exe_path)
-                                .arg("--daemon")
                                 .spawn();
 
                             match child {
                                 Ok(_child) => {
-                                    eprintln!("Daemon started.");
+                                    message = Some("Daemon started.".to_string());
+                                    message_timeout = std::time::Instant::now();
                                     // Give the new daemon a moment to write its PID file
                                     std::thread::sleep(Duration::from_millis(300));
                                 }
                                 Err(e) => {
-                                    eprintln!("Failed to start daemon: {}", e);
+                                    message = Some(format!("Failed to start daemon: {}", e));
+                                    message_timeout = std::time::Instant::now();
                                 }
                             }
                         }
@@ -216,11 +221,18 @@ fn run_ui(
                         // Stop daemon, stay in TUI (no save)
                         if daemon::is_daemon_running() {
                             match daemon::stop_daemon() {
-                                Ok(()) => eprintln!("Daemon stopped."),
-                                Err(e) => eprintln!("Daemon stop error: {}", e),
+                                Ok(()) => {
+                                    message = Some("Daemon stopped.".to_string());
+                                    message_timeout = std::time::Instant::now();
+                                }
+                                Err(e) => {
+                                    message = Some(format!("Daemon stop error: {}", e));
+                                    message_timeout = std::time::Instant::now();
+                                }
                             }
                         } else {
-                            eprintln!("No daemon is running.");
+                            message = Some("No daemon is running.".to_string());
+                            message_timeout = std::time::Instant::now();
                         }
                     }
                     KeyCode::Char('c') | KeyCode::Char('C') => {
@@ -274,6 +286,9 @@ fn ui(
     focused_field: usize,
     editing: bool,
     edit_buffer: &str,
+    reattached: bool,
+    message: &Option<String>,
+    message_timeout: &std::time::Instant,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -283,7 +298,8 @@ fn ui(
             Constraint::Length(3),   // Checkbox
             Constraint::Length(4),   // Status
             Constraint::Length(3),   // Buttons
-            Constraint::Length(2),   // Help
+            Constraint::Length(2),   // Message
+            Constraint::Length(1),   // Help
         ])
         .split(frame.area());
 
@@ -410,20 +426,26 @@ fn ui(
 
     // Status panel
     let daemon_running = daemon::is_daemon_running();
+    let pid_file_exists = config::daemon_pid_path().exists();
     let startup_enabled = startup::is_enabled().unwrap_or(false);
     let cleanup_enabled = cleanup::is_cleanup_task_enabled().unwrap_or(false);
+
+    let (daemon_label, daemon_color) = if daemon_running {
+        if reattached {
+            ("Running (re-attached)", Color::Green)
+        } else {
+            ("Running", Color::Green)
+        }
+    } else if pid_file_exists {
+        ("Stopped (Died)", Color::Yellow)
+    } else {
+        ("Stopped", Color::Red)
+    };
 
     let status_text = Text::from(vec![
         Line::from(vec![
             Span::styled("  Daemon:     ", normal_style),
-            Span::styled(
-                if daemon_running { "Running" } else { "Stopped" },
-                if daemon_running {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::Red)
-                },
-            ),
+            Span::styled(daemon_label, Style::default().fg(daemon_color)),
         ]),
         Line::from(vec![
             Span::styled("  Startup:    ", normal_style),
@@ -479,6 +501,17 @@ fn ui(
         .block(Block::default().borders(Borders::ALL).title(" Actions "));
     frame.render_widget(buttons, chunks[4]);
 
+    // Message area
+    let message_text = match message {
+        Some(msg) if message_timeout.elapsed().as_secs() < 5 => {
+            Paragraph::new(msg.as_str())
+                .style(Style::default().fg(Color::Yellow))
+        }
+        _ => Paragraph::new("")
+            .style(Style::default().fg(Color::DarkGray)),
+    };
+    frame.render_widget(message_text, chunks[5]);
+
     // Help
     let help = if editing {
         Paragraph::new(" Enter: Confirm | Esc: Cancel | Tab: Next field")
@@ -487,7 +520,7 @@ fn ui(
         Paragraph::new(" Tab/Shift+Tab: Navigate | Enter: Edit | Esc: Quit")
             .style(Style::default().fg(Color::DarkGray))
     };
-    frame.render_widget(help, chunks[5]);
+    frame.render_widget(help, chunks[6]);
 }
 
 fn apply_edit(config: &mut Config, field: usize, buffer: &str) {

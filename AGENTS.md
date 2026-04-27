@@ -6,7 +6,7 @@ A stealth screen-logging daemon for monitoring PC access while away. Runs invisi
 ## Architecture
 
 ### Modules
-- **`main.rs`** — Entry point. Detects mode (daemon vs TUI) via named mutex acquisition and `--tui` flag. Hides console window in daemon mode.
+- **`main.rs`** — Entry point. Detects mode (daemon vs TUI) via PID file check and named mutex acquisition. `--tui` flag forces TUI, `--daemon` flag forces daemon (bypasses all checks). Hides console window in daemon mode.
 - **`config.rs`** — Configuration struct (interval, disk limit, output dir, format, retention, startup persistence). Loaded/saved as JSON in `%APPDATA%\self-awareness\config.json`.
 - **`capture.rs`** — Screen capture using GDI BitBlt (no nightly Rust required). Saves immediately to disk for zero data loss on shutdown.
 - **`daemon.rs`** — Infinite capture loop. Writes PID file for TUI to stop it. Enforces disk space limits by deleting oldest files.
@@ -17,9 +17,17 @@ A stealth screen-logging daemon for monitoring PC access while away. Runs invisi
 ### Program Modes
 | Invocation | Behavior |
 |---|---|
-| `self-awareness.exe` | Daemon mode (if no other instance running), else shows TUI |
-| `self-awareness.exe --tui` | Always shows TUI |
-| `self-awareness.exe --daemon` | Always runs as daemon (detached from console, bypasses mutex check) |
+| `self-awareness.exe` | Checks PID file: if daemon running → TUI (re-attach); if PID stale → TUI (stopped); else tries mutex → daemon or TUI |
+| `self-awareness.exe --tui` | Always shows TUI (reattaches if daemon running) |
+| `self-awareness.exe --daemon` | Always runs as daemon (bypasses all checks) |
+
+### Startup Flow
+| Scenario | Behavior |
+|---|---|
+| Fresh start (no PID file) | Acquires mutex → runs as daemon |
+| Daemon running (PID valid) | Opens TUI in **re-attached** mode — can manage daemon |
+| Stale PID (process dead) | Opens TUI showing **Stopped (Died)** — user can press D to start |
+| Another instance running | Mutex fails → shows TUI |
 
 ### Stealth Features
 - Console window hidden via `GetConsoleWindow` + `ShowWindow(SW_HIDE)` in daemon mode
@@ -96,6 +104,8 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 - **D**: Starts daemon only if not already running (prevents multiple instances)
 - **X**: Stops daemon only if running (no-op otherwise)
 - **D/X/C**: Stay in TUI after action (no save, no exit)
+- **Daemon messages**: Start/stop/status messages appear in the message area (below buttons) for 5 seconds instead of stderr
+- **Re-attach mode**: When launched while a daemon is running, status shows "Running (re-attached)" — fully manageable from TUI
 
 ## Files
 | File | Purpose |
@@ -122,3 +132,5 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 - WebP encoding uses `image` crate's built-in codec (lossy at 95% quality for small file sizes)
 - The release profile enables LTO, stripping, and max optimization
 - Daemon is spawned from TUI with `DETACHED_PROCESS` flag so it runs independently of the TUI's console — exiting the TUI does not affect the daemon
+- Normal startup checks PID file first: if a valid daemon is running, launches TUI in re-attach mode rather than trying to start a new daemon
+- Stale PID files (dead process) are cleaned up automatically; TUI shows "Stopped (Died)" so the user can restart with 'd'
