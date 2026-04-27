@@ -105,7 +105,6 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 - **X**: Stops daemon only if running (no-op otherwise)
 - **D/X/C**: Stay in TUI after action (no save, no exit)
 - **Daemon messages**: Start/stop/status messages appear in the message area (below buttons) for 5 seconds instead of stderr
-- **Re-attach mode**: When launched while a daemon is running, status shows "Running (re-attached)" — fully manageable from TUI
 
 ## Files
 | File | Purpose |
@@ -132,5 +131,5 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 - WebP encoding uses `image` crate's built-in codec (lossy at 95% quality for small file sizes)
 - The release profile enables LTO, stripping, and max optimization
 - Daemon is spawned from TUI with `DETACHED_PROCESS` flag so it runs independently of the TUI's console — exiting the TUI does not affect the daemon
-- Normal startup checks PID file first: if a valid daemon is running, launches TUI in re-attach mode rather than trying to start a new daemon
+- Normal startup checks PID file first: if a valid daemon is running, launches TUI to manage it rather than trying to start a new daemon
 - Stale PID files (dead process) are cleaned up automatically; TUI shows "Stopped (Died)" so the user can restart with 'd'

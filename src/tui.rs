@@ -37,8 +37,7 @@ pub enum TuiAction {
 }
 
 /// Run the TUI for configuring the self-awareness monitor.
-/// `reattached` is true when the TUI is launched because a daemon is already running.
-pub fn run_tui(config: &mut Config, reattached: bool) -> Result<TuiAction> {
+pub fn run_tui(config: &mut Config) -> Result<TuiAction> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -47,7 +46,7 @@ pub fn run_tui(config: &mut Config, reattached: bool) -> Result<TuiAction> {
     let mut terminal = Terminal::new(backend)?;
 
     // Run TUI loop
-    let result = run_ui(&mut terminal, config, reattached);
+    let result = run_ui(&mut terminal, config);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -64,7 +63,6 @@ pub fn run_tui(config: &mut Config, reattached: bool) -> Result<TuiAction> {
 fn run_ui(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
-    reattached: bool,
 ) -> Result<TuiAction> {
     let mut focused_field: usize = 0;
     let mut editing = false;
@@ -76,7 +74,7 @@ fn run_ui(
     loop {
         terminal.draw(|frame| {
             match page {
-                Page::Main => ui(frame, config, focused_field, editing, &edit_buffer, reattached, &message, &message_timeout),
+                Page::Main => ui(frame, config, focused_field, editing, &edit_buffer, &message, &message_timeout),
                 Page::Tasks => tasks_ui(frame, config),
             }
         })?;
@@ -286,7 +284,6 @@ fn ui(
     focused_field: usize,
     editing: bool,
     edit_buffer: &str,
-    reattached: bool,
     message: &Option<String>,
     message_timeout: &std::time::Instant,
 ) {
@@ -431,11 +428,7 @@ fn ui(
     let cleanup_enabled = cleanup::is_cleanup_task_enabled().unwrap_or(false);
 
     let (daemon_label, daemon_color) = if daemon_running {
-        if reattached {
-            ("Running (re-attached)", Color::Green)
-        } else {
-            ("Running", Color::Green)
-        }
+        ("Running", Color::Green)
     } else if pid_file_exists {
         ("Stopped (Died)", Color::Yellow)
     } else {

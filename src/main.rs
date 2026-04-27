@@ -75,15 +75,13 @@ fn main() {
         run_daemon_application();
     } else if tui_mode {
         // Always show TUI when requested
-        let daemon_running = daemon::is_daemon_running();
-        let reattached = daemon_running;
-        run_tui_application(reattached);
+        run_tui_application();
     } else {
         // Normal startup: check PID file first to detect running daemon
         let daemon_running = daemon::is_daemon_running();
         if daemon_running {
             // A daemon is already running — show TUI to manage it
-            run_tui_application(true);
+            run_tui_application();
         } else {
             // No running daemon — try to acquire mutex and start one
             if acquire_daemon_mutex() {
@@ -91,13 +89,13 @@ fn main() {
                 run_daemon_application();
             } else {
                 // Another instance is running — show TUI
-                run_tui_application(false);
+                run_tui_application();
             }
         }
     }
 }
 
-fn run_tui_application(reattached: bool) {
+fn run_tui_application() {
     let mut config = match config::Config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -107,7 +105,7 @@ fn run_tui_application(reattached: bool) {
     };
 
     loop {
-        let action = match tui::run_tui(&mut config, reattached) {
+        let action = match tui::run_tui(&mut config) {
             Ok(a) => a,
             Err(e) => {
                 eprintln!("TUI error: {}", e);
