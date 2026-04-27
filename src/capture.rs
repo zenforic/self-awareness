@@ -1,0 +1,142 @@
+use anyhow::Result;
+use chrono::Timelike;
+use std::path::Path;
+use image::{DynamicImage, ImageBuffer, Rgba};
+
+use crate::config::ImageFormat;
+
+/// Capture the screen using GDI BitBlt and save it to the specified directory.
+pub fn capture_and_save(output_dir: &str, format: &ImageFormat) -> Result<()> {
+    std::fs::create_dir_all(output_dir)?;
+
+    let (rgba, width, height) = capture_screen()?;
+    let img = ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, rgba)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create image from screen capture"))?;
+    let dyn_img = DynamicImage::ImageRgba8(img);
+
+    let now = chrono::Local::now();
+    let timestamp = now.format("%Y%m%d_%H%M%S");
+    let millis = now.nanosecond() / 1_000_000;
+    let filename = format!("{}_{}.{}", timestamp, millis, format.extension());
+    let path = Path::new(output_dir).join(filename);
+
+    save_image(&dyn_img, &path, format)?;
+
+    Ok(())
+}
+
+/// Capture the screen using GDI BitBlt.
+/// Returns RGBA pixel data, width, and height.
+fn capture_screen() -> Result<(Vec<u8>, u32, u32)> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Graphics::Gdi::{
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteObject,
+        GetDIBits, GetDC, ReleaseDC, SelectObject, SRCCOPY, HBITMAP, HGDIOBJ,
+    };
+
+    let (width, height): (u32, u32) = unsafe {
+        let w = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+            windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN,
+        );
+        let h = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+            windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN,
+        );
+        (w as u32, h as u32)
+    };
+
+    if width == 0 || height == 0 {
+        return Err(anyhow::anyhow!("Screen dimensions are zero"));
+    }
+
+    let rgba = unsafe {
+        // Get desktop DC
+        let desktop = windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow();
+        let hdc = GetDC(desktop);
+        if hdc.0.is_null() {
+            return Err(anyhow::anyhow!("GetDC failed"));
+        }
+
+        // Create compatible DC and bitmap
+        let memdc = CreateCompatibleDC(hdc);
+        if memdc.0.is_null() {
+            ReleaseDC(desktop, hdc);
+            return Err(anyhow::anyhow!("CreateCompatibleDC failed"));
+        }
+
+        let bitmap: HBITMAP =
+            CreateCompatibleBitmap(hdc, width as i32, height as i32);
+        if bitmap.0.is_null() {
+            ReleaseDC(desktop, hdc);
+            let _ = DeleteObject(HGDIOBJ(memdc.0));
+            return Err(anyhow::anyhow!("CreateCompatibleBitmap failed"));
+        }
+
+        let old_obj = SelectObject(memdc, HGDIOBJ(bitmap.0));
+
+        // Blit from desktop DC to memory DC
+        BitBlt(
+            memdc,
+            0,
+            0,
+            width as i32,
+            height as i32,
+            hdc,
+            0,
+            0,
+            SRCCOPY,
+        )?;
+
+        // Get bitmap bits (BGRA format from Windows)
+        let mut bmi: windows::Win32::Graphics::Gdi::BITMAPINFO =
+            std::mem::zeroed();
+        bmi.bmiHeader.biSize =
+            std::mem::size_of::<windows::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = width as i32;
+        bmi.bmiHeader.biHeight = height as i32;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = 0; // BI_RGB
+
+        let mut bits = vec![0u8; width as usize * height as usize * 4];
+        let result = GetDIBits(
+            memdc,
+            bitmap,
+            0,
+            height,
+            Some(bits.as_mut_ptr() as *mut _),
+            &mut bmi,
+            windows::Win32::Graphics::Gdi::DIB_RGB_COLORS,
+        );
+
+        // Restore old object and clean up
+        SelectObject(memdc, old_obj);
+        ReleaseDC(desktop, hdc);
+        let _ = DeleteObject(HGDIOBJ(memdc.0));
+        let _ = DeleteObject(HGDIOBJ(bitmap.0));
+        let _ = CloseHandle(HANDLE(memdc.0));
+
+        if result == 0 {
+            return Err(anyhow::anyhow!("GetDIBits failed"));
+        }
+
+        // Convert BGRA (Windows format) to RGBA (image crate format)
+        let mut rgba = Vec::with_capacity(bits.len());
+        for i in (0..bits.len()).step_by(4) {
+            rgba.push(bits[i + 2]); // R
+            rgba.push(bits[i + 1]); // G
+            rgba.push(bits[i]);     // B
+            rgba.push(255);         // A (opaque)
+        }
+
+        rgba
+    };
+
+    Ok((rgba, width, height))
+}
+
+fn save_image(img: &DynamicImage, path: &Path, _format: &ImageFormat) -> Result<()> {
+    // The image crate's save() method uses the codec system and supports
+    // WebP when the "webp" feature is enabled.
+    img.save(path)?;
+    Ok(())
+}
