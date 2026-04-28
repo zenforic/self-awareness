@@ -67,7 +67,7 @@ pub fn run_schtasks_auto_elevate(
             anyhow::bail!("Failed to create task (elevated): {}", stderr2);
         } else {
             // User cancelled UAC prompt (error code <= 32)
-            anyhow::bail!("Elevation required to create scheduled task. Operation cancelled.");
+            anyhow::bail!("Elevation required to create scheduled task. Press C again to retry, or run the program as administrator.");
         }
     }
 
