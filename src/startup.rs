@@ -6,15 +6,16 @@ pub fn enable_startup() -> Result<()> {
     let exe_path = std::env::current_exe()?.to_string_lossy().to_string();
     let task_name = "SelfAwarenessStartup";
 
-    // Create task via schtasks directly (not through cmd /C to avoid escaping issues)
-    // Pass --daemon so the startup execution bypasses mutex check and always runs as daemon
+    // Create task via schtasks directly.
+    // The /TR argument has the path quoted so spaces in the path are handled correctly.
+    // Note: We do NOT use /RL HIGHEST as that requires admin privileges.
+    // The task runs with the user's normal privileges, which is sufficient.
     let output = std::process::Command::new("schtasks")
         .args(&[
             "/Create",
             "/TN", task_name,
             "/TR", &format!("\"{}\" --daemon", exe_path),
             "/SC", "ONLOGON",
-            "/RL", "HIGHEST",
             "/F",
         ])
         .output()?;
@@ -48,7 +49,7 @@ pub fn is_enabled() -> Result<bool> {
     let task_name = "SelfAwarenessStartup";
 
     let output = std::process::Command::new("schtasks")
-        .args(&["/Query", "/TN", task_name, "/V", "/FO", "LIST"])
+        .args(&["/Query", "/TN", task_name])
         .output()?;
 
     Ok(output.status.success())

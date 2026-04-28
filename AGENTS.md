@@ -43,6 +43,7 @@ A stealth screen-logging daemon for monitoring PC access while away. Runs invisi
 - Cleanup task uses `forfiles` to delete old images daily at 2 AM — independent of the daemon
 - `schtasks` is invoked directly (not via `cmd /C`) to avoid argument escaping issues
 - `cleanup.bat` is regenerated when config is saved and daemon is restarted, using absolute paths
+- Task runs with user-level privileges (no `/RL HIGHEST`) — sufficient for screen logging
 
 ## Building
 ```bash

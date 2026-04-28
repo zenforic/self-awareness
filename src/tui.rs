@@ -269,11 +269,31 @@ fn run_ui(
                         config.start_on_boot = !config.start_on_boot;
                         // Update the actual Task Scheduler tasks immediately
                         if config.start_on_boot {
-                            let _ = startup::enable_startup();
-                            let _ = cleanup::create_cleanup_task(config);
+                            match startup::enable_startup() {
+                                Ok(()) => {
+                                    let _ = cleanup::create_cleanup_task(config);
+                                    message = Some("Startup task enabled.".to_string());
+                                    message_timeout = std::time::Instant::now();
+                                }
+                                Err(e) => {
+                                    message = Some(format!("Failed to enable startup: {}", e));
+                                    message_timeout = std::time::Instant::now();
+                                    config.start_on_boot = false;
+                                }
+                            }
                         } else {
-                            let _ = startup::disable_startup();
-                            let _ = cleanup::remove_cleanup_task();
+                            match startup::disable_startup() {
+                                Ok(()) => {
+                                    let _ = cleanup::remove_cleanup_task();
+                                    message = Some("Startup task disabled.".to_string());
+                                    message_timeout = std::time::Instant::now();
+                                }
+                                Err(e) => {
+                                    message = Some(format!("Failed to disable startup: {}", e));
+                                    message_timeout = std::time::Instant::now();
+                                    config.start_on_boot = true;
+                                }
+                            }
                         }
                     }
                     KeyCode::Char('t') | KeyCode::Char('T') => {
