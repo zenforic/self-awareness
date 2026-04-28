@@ -3,6 +3,7 @@ mod config;
 mod daemon;
 mod startup;
 mod cleanup;
+mod elevate;
 mod tui;
 
 use std::env;

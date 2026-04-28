@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::config::{self, Config};
+use crate::elevate::run_schtasks_auto_elevate;
 
 /// Create a Windows Task Scheduler task that runs a cleanup script daily
 /// to delete images older than the configured retention period.
@@ -20,26 +21,20 @@ pub fn create_cleanup_task(config: &Config) -> Result<()> {
     std::fs::write(&script_path, batch_content)?;
 
     // Create scheduled task to run the cleanup script daily at 2 AM
-    // Note: We do NOT use /RL HIGHEST as that requires admin privileges.
-    // The task runs with the user's normal privileges, which is sufficient.
     let task_name = "SelfAwarenessCleanup";
     let script_path_str = script_path.to_string_lossy().to_string();
 
-    let output = std::process::Command::new("schtasks")
-        .args(&[
+    run_schtasks_auto_elevate(
+        "schtasks",
+        &[
             "/Create",
             "/TN", task_name,
             "/TR", &format!("cmd /c \"{}\"", script_path_str),
             "/SC", "DAILY",
             "/ST", "02:00",
             "/F",
-        ])
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to create cleanup task: {}", stderr);
-    }
+        ],
+    )?;
 
     Ok(())
 }

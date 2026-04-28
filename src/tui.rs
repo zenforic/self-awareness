@@ -382,7 +382,7 @@ fn ui(
             Constraint::Length(3),   // Checkbox
             Constraint::Length(4),   // Status
             Constraint::Length(3),   // Buttons
-            Constraint::Length(2),   // Message
+            Constraint::Length(3),   // Message
             Constraint::Length(1),   // Help
         ])
         .split(frame.area());
@@ -600,9 +600,11 @@ fn ui(
         Some(msg) if message_timeout.elapsed().as_secs() < 5 => {
             Paragraph::new(msg.as_str())
                 .style(Style::default().fg(Color::Yellow))
+                .block(Block::default().borders(Borders::ALL).title(" Message "))
         }
         _ => Paragraph::new("")
-            .style(Style::default().fg(Color::DarkGray)),
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL).title(" Message ")),
     };
     frame.render_widget(message_text, chunks[5]);
 
