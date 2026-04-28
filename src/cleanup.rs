@@ -20,16 +20,20 @@ pub fn create_cleanup_task(config: &Config) -> Result<()> {
     std::fs::write(&script_path, batch_content)?;
 
     // Create scheduled task to run the cleanup script daily at 2 AM
+    // Note: We do NOT use /RL HIGHEST as that requires admin privileges.
+    // The task runs with the user's normal privileges, which is sufficient.
     let task_name = "SelfAwarenessCleanup";
-    let escaped_script = script_path.to_string_lossy().replace('"', "\"\"");
+    let script_path_str = script_path.to_string_lossy().to_string();
 
-    let command = format!(
-        "schtasks /Create /TN \"{}\" /TR \"cmd /c \\\"{}\\\"\" /SC DAILY /ST 02:00 /RL HIGHEST /F",
-        task_name, escaped_script
-    );
-
-    let output = std::process::Command::new("cmd")
-        .args(&["/C", &command])
+    let output = std::process::Command::new("schtasks")
+        .args(&[
+            "/Create",
+            "/TN", task_name,
+            "/TR", &format!("cmd /c \"{}\"", script_path_str),
+            "/SC", "DAILY",
+            "/ST", "02:00",
+            "/F",
+        ])
         .output()?;
 
     if !output.status.success() {
@@ -44,10 +48,8 @@ pub fn create_cleanup_task(config: &Config) -> Result<()> {
 pub fn remove_cleanup_task() -> Result<()> {
     let task_name = "SelfAwarenessCleanup";
 
-    let command = format!("schtasks /Delete /TN \"{}\" /F", task_name);
-
-    let output = std::process::Command::new("cmd")
-        .args(&["/C", &command])
+    let output = std::process::Command::new("schtasks")
+        .args(&["/Delete", "/TN", task_name, "/F"])
         .output()?;
 
     if !output.status.success() {
