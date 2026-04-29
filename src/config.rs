@@ -9,6 +9,11 @@ pub struct Config {
     pub image_format: ImageFormat,
     pub retention_days: u64,
     pub start_on_boot: bool,
+    /// Whether screenshots are encrypted at rest with AES-256-GCM.
+    /// Defaults to `false` for existing configs (backward compatible),
+    /// `true` for new configs.
+    #[serde(default)]
+    pub encrypt_images: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +33,7 @@ impl Default for Config {
             image_format: ImageFormat::Webp,
             retention_days: 7,
             start_on_boot: false,
+            encrypt_images: true,
         }
     }
 }
@@ -50,6 +56,8 @@ impl Config {
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
             let config: Config = serde_json::from_str(&content)?;
+            // Existing configs without encrypt_images get `false` from #[serde(default)]
+            // — backward compatible. New configs get `true` from Default.
             Ok(config)
         } else {
             let config = Config::default();

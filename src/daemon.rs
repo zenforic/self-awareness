@@ -1,7 +1,6 @@
 use anyhow::Result;
 
 use crate::config::{self, Config};
-use crate::capture::capture_and_save;
 
 /// Run the daemon loop: capture screenshots at the configured interval.
 /// This function runs in an infinite loop until the process is terminated.
@@ -14,7 +13,7 @@ pub fn run(config: &Config) -> Result<()> {
 
     loop {
         // Take screenshot (immediate write to disk — no data loss on shutdown)
-        if let Err(e) = capture_and_save(&config.output_dir, &config.image_format) {
+        if let Err(e) = crate::capture::capture_and_save(&config.output_dir, &config.image_format, config.encrypt_images) {
             log_message(&format!("Capture error: {}", e));
         }
 
@@ -109,7 +108,7 @@ fn list_image_files(dir: &str) -> Result<Vec<std::path::PathBuf>> {
         if path.is_file() {
             if let Some(ext) = path.extension() {
                 let ext = ext.to_string_lossy().to_lowercase();
-                if ext == "webp" || ext == "jpg" || ext == "jpeg" || ext == "png" {
+                if ext == "webp" || ext == "jpg" || ext == "jpeg" || ext == "png" || ext == "enc" {
                     files.push(path);
                 }
             }

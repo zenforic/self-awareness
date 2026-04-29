@@ -12,10 +12,16 @@ pub fn create_cleanup_task(config: &Config) -> Result<()> {
     let script_path = app_dir.join("cleanup.bat");
 
     // Write the cleanup batch script
+    // When encryption is enabled, files are .enc; otherwise use the image format extension.
+    let file_extension = if config.encrypt_images {
+        crate::crypto::ENCRYPTED_EXTENSION
+    } else {
+        config.image_format.extension()
+    };
     let batch_content = format!(
         "@echo off\nforfiles /p \"{}\" /m *.{} /d -{} /c \"cmd /c del @path\" 2>nul\n",
         config.output_dir,
-        config.image_format.extension(),
+        file_extension,
         config.retention_days
     );
     std::fs::write(&script_path, batch_content)?;

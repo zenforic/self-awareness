@@ -4,9 +4,11 @@ use std::path::Path;
 use image::{DynamicImage, ImageBuffer, Rgba};
 
 use crate::config::ImageFormat;
+use crate::crypto;
 
 /// Capture the screen using GDI BitBlt and save it to the specified directory.
-pub fn capture_and_save(output_dir: &str, format: &ImageFormat) -> Result<()> {
+/// If `encrypt` is true, the image is encrypted with AES-256-GCM and saved as `.enc`.
+pub fn capture_and_save(output_dir: &str, format: &ImageFormat, encrypt: bool) -> Result<()> {
     std::fs::create_dir_all(output_dir)?;
 
     let (rgba, width, height) = capture_screen()?;
@@ -17,10 +19,22 @@ pub fn capture_and_save(output_dir: &str, format: &ImageFormat) -> Result<()> {
     let now = chrono::Local::now();
     let timestamp = now.format("%Y%m%d_%H%M%S");
     let millis = now.nanosecond() / 1_000_000;
-    let filename = format!("{}_{}.{}", timestamp, millis, format.extension());
-    let path = Path::new(output_dir).join(filename);
 
-    save_image(&dyn_img, &path, format)?;
+    if encrypt {
+        let key = crypto::load_key()?;
+        let encoded = encode_to_bytes(&dyn_img, format)?;
+        let encrypted = crypto::encrypt_image(&key, &encoded, *format)?;
+        let filename = format!("{}_{}.{}", timestamp, millis, crypto::ENCRYPTED_EXTENSION);
+        let path = Path::new(output_dir).join(filename);
+        // Atomic write: write to temp file, then rename
+        let tmp_path = path.with_extension("tmp");
+        std::fs::write(&tmp_path, &encrypted)?;
+        std::fs::rename(&tmp_path, &path)?;
+    } else {
+        let filename = format!("{}_{}.{}", timestamp, millis, format.extension());
+        let path = Path::new(output_dir).join(filename);
+        save_image(&dyn_img, &path, format)?;
+    }
 
     Ok(())
 }
@@ -134,6 +148,21 @@ fn capture_screen() -> Result<(Vec<u8>, u32, u32)> {
     };
 
     Ok((rgba, width, height))
+}
+
+/// Encode a DynamicImage to raw bytes in the specified format.
+fn encode_to_bytes(img: &DynamicImage, format: &ImageFormat) -> Result<Vec<u8>> {
+    use image::ImageOutputFormat;
+
+    let image_format = match format {
+        ImageFormat::Webp => ImageOutputFormat::WebP,
+        ImageFormat::Jpeg => ImageOutputFormat::Jpeg(95),
+        ImageFormat::Png => ImageOutputFormat::Png,
+    };
+
+    let mut buffer = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buffer), image_format)?;
+    Ok(buffer)
 }
 
 fn save_image(img: &DynamicImage, path: &Path, _format: &ImageFormat) -> Result<()> {

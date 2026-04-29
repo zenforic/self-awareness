@@ -675,7 +675,7 @@ fn format_usage(dir: &str) -> String {
             if path.is_file() {
                 if let Some(ext) = path.extension() {
                     let ext = ext.to_string_lossy().to_lowercase();
-                    if ext == "webp" || ext == "jpg" || ext == "jpeg" || ext == "png" {
+                    if ext == "webp" || ext == "jpg" || ext == "jpeg" || ext == "png" || ext == "enc" {
                         if let Ok(metadata) = path.metadata() {
                             total += metadata.len();
                             count += 1;
