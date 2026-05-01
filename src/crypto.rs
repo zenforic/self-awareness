@@ -31,8 +31,6 @@ const FORMAT_OFFSET: usize = 4;
 const NONCE_OFFSET: usize = 5;
 /// Nonce length for AES-GCM (96 bits).
 const NONCE_LEN: usize = 12;
-/// GCM authentication tag length.
-const TAG_LEN: usize = 16;
 /// Chain hash length.
 const CHAIN_HASH_LEN: usize = 32;
 /// Format byte flag indicating the presence of a hash chain.

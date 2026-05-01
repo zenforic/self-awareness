@@ -16,6 +16,9 @@ A lightweight, stealth screen-logging daemon for Windows. Runs invisibly in the 
 - **Retention policy** — a scheduled cleanup task prunes images older than N days, independent of the daemon
 - **Startup persistence** — optional Windows Task Scheduler task (`SelfAwarenessStartup`) launches the daemon at logon
 - **Full TUI** — configure everything, start/stop the daemon, and manage tasks from a terminal interface
+- **Secure by default** — images are encrypted at rest via AES-256-GCM with Windows DPAPI keys
+- **Tamper detection** — files use a SHA-256 hash chain sequence to prevent silent deletion/tampering
+- **Built-in viewer** — an integrated TUI viewer allows inspecting the hash chain and securely viewing screenshots
 - **Single-instance safety** — named mutex + PID file prevent duplicate daemon processes
 - **Pure stable Rust** — GDI BitBlt screen capture, no nightly compiler required
 
@@ -90,6 +93,7 @@ Launch the TUI with `self-awareness.exe --tui` (or let auto-detect open it).
 | `X` | Stop daemon (stays in TUI) |
 | `C` | Toggle startup-on-boot task |
 | `T` | Switch to Tasks page |
+| `V` | Switch to Viewer page |
 | `E` | Exit TUI (daemon keeps running) |
 | `Q` | Stop daemon and exit |
 
@@ -106,6 +110,19 @@ After saving with `S`, the TUI asks **"Restart daemon? [Y/N]"** — pressing `Y`
 | `E` | Exit TUI (daemon keeps running) |
 | `Q` | Stop daemon and exit |
 
+### Viewer page (`V`)
+
+| Key | Action |
+|---|---|
+| `Up/Down` | Navigate list |
+| `PgUp/PgDn` | Fast navigation |
+| `Enter` | Decrypt and open selected image in default viewer |
+| `F` / `/` | Focus search filter (type to filter, Enter/Esc to finish) |
+| `I` | Investigate all (decrypts all current images into a folder) |
+| `V` / `Esc` | Back to main page |
+| `E` | Exit TUI (daemon keeps running) |
+| `Q` | Stop daemon and exit |
+
 ---
 
 ## Configuration
@@ -119,7 +136,9 @@ Settings are stored in `%APPDATA%\self-awareness\config.json`:
   "output_dir": "C:\\Users\\<you>\\Pictures\\self-awareness",
   "image_format": "webp",
   "retention_days": 7,
-  "start_on_boot": false
+  "start_on_boot": false,
+  "encrypt_images": true,
+  "hash_chain": true
 }
 ```
 
@@ -131,6 +150,8 @@ Settings are stored in `%APPDATA%\self-awareness\config.json`:
 | `image_format` | Output format: `webp`, `jpeg`, or `png` | `webp` |
 | `retention_days` | Delete images older than N days (via cleanup task) | `7` |
 | `start_on_boot` | Whether the startup task is currently enabled | `false` |
+| `encrypt_images` | Whether to use AES-256-GCM + DPAPI encryption | `true` |
+| `hash_chain` | Whether to maintain a SHA-256 cryptographic sequence | `true` |
 
 Relative paths entered in the TUI are automatically converted to absolute paths on save.
 
@@ -167,14 +188,21 @@ Both scheduled tasks are created via `schtasks /Create`. The startup task runs `
 
 ---
 
-## Security Notes
+## Security & Encryption
 
-> ⚠️ Screenshots can capture passwords, personal messages, financial details, and other sensitive information. Keep the following in mind:
+Self-Awareness features a robust, zero-friction encryption system designed to protect captured screenshots from unauthorised access and tampering.
 
-- **Avoid capturing sensitive sessions** — if you regularly handle personal, financial, or confidential information on the monitored machine, be deliberate about when the daemon is running.
-- **Store images in an inconspicuous location** — the default `Pictures\self-awareness` path is readable by any process running as your user. Consider pointing `output_dir` at a less obvious directory.
-- **Use an encrypted volume** — the safest option is to store screenshots inside an encrypted container (e.g. a [VeraCrypt](https://www.veracrypt.fr/) file volume). Mount it before the daemon starts and dismount it when not in use; images are unreadable to anyone without the key while the volume is locked.
-- **Native security features** are not yet built in — encryption, access control, and viewer authentication are planned for a future release.
+### AES-256-GCM + DPAPI
+When `encrypt_images` is enabled, images are encrypted at rest using a 256-bit AES-GCM key. This master key is generated securely on first run and protected by **Windows DPAPI** (Data Protection API), tying it directly to your Windows user account. Even if another user or process accesses your hard drive or copies the files, they cannot decrypt the images without being logged into your Windows session.
+
+### Hash Chain Tamper Detection
+When `hash_chain` is enabled, each image contains a cryptographic sequence hash. The hash formula is `SHA-256(prev_chain_hash || current_file_hash || timestamp)`.
+
+> **Note on verification:** Because the hash chain computes a single sequential state representing the previous file and the current file, an integrity failure (marked `✗ Broken` in the Viewer) indicates that *the sequence is broken at this point*. This could mean either:
+> 1. A file was deleted, reordered, or its name (timestamp) was modified.
+> 2. The *current* file's content was tampered with.
+> 
+> A broken hash serves as an immediate tamper-evident flag to the user without having to decrypt anything. (Content tampering is strictly prevented anyway upon decryption, as AES-GCM will hard-fail the authentication tag check).
 
 ---
 
@@ -189,7 +217,10 @@ Both scheduled tasks are created via `schtasks /Create`. The startup task runs `
 | [`chrono`](https://crates.io/crates/chrono) | Timestamp generation |
 | [`anyhow`](https://crates.io/crates/anyhow) | Error handling |
 | [`dirs`](https://crates.io/crates/dirs) | Platform paths (`%APPDATA%`, `Pictures`, …) |
-| [`windows`](https://crates.io/crates/windows) | Win32 API (GDI capture, process management, console hiding) |
+| [`windows`](https://crates.io/crates/windows) | Win32 API (GDI capture, DPAPI, process management) |
+| [`aes-gcm`](https://crates.io/crates/aes-gcm) | Encryption at rest |
+| [`sha2`](https://crates.io/crates/sha2) | Hash chain generation |
+| [`rand`](https://crates.io/crates/rand) | Secure random nonce and key generation |
 
 ---
 

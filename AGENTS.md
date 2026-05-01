@@ -13,6 +13,8 @@ A stealth screen-logging daemon for monitoring PC access while away. Runs invisi
 - **`tui.rs`** — Terminal UI using `ratatui` + `crossterm`. Allows editing settings, starting/stopping daemon, toggling startup persistence.
 - **`startup.rs`** — Manages Windows Task Scheduler task (`SelfAwarenessStartup`) for hidden startup logging.
 - **`cleanup.rs`** — Creates a scheduled task (`SelfAwarenessCleanup`) that runs a batch script daily to delete images older than the retention period — runs independently of the daemon.
+- **`crypto.rs`** — Handles AES-GCM encryption with DPAPI keys and manages the hash chain sequence.
+- **`viewer.rs`** — Provides logic for the TUI Viewer page to list, verify, and decrypt captured images.
 
 ### Program Modes
 | Invocation | Behavior |
@@ -59,7 +61,10 @@ cargo build --release  # Release build (production)
 - `chrono` — Timestamps
 - `anyhow` — Error handling
 - `dirs` — Platform paths (AppData, Pictures)
-- `windows` — Windows API (console hiding, process management, GDI screen capture)
+- `windows` — Windows API (console hiding, process management, GDI screen capture, DPAPI)
+- `aes-gcm` — Encryption at rest
+- `sha2` — Tamper detection hash chain
+- `rand` — Secure random generation
 
 ## Configuration
 Stored in `%APPDATA%\self-awareness\config.json`:
@@ -70,7 +75,9 @@ Stored in `%APPDATA%\self-awareness\config.json`:
   "output_dir": "C:\\Users\\...\\Pictures\\self-awareness",
   "image_format": "webp",
   "retention_days": 7,
-  "start_on_boot": false
+  "start_on_boot": false,
+  "encrypt_images": true,
+  "hash_chain": true
 }
 ```
 
@@ -98,6 +105,18 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 | Q | Quit (stops daemon and exits) |
 | E | Exit (keeps daemon running) |
 
+### Viewer Page (V key to enter, Esc/V to return)
+| Key | Action |
+|---|---|
+| Up / Down | Navigate list |
+| PgUp / PgDn | Fast navigation |
+| F / / | Focus search filter (type to filter, Enter/Esc to finish) |
+| Enter | Decrypt and open selected image in default viewer |
+| I | Investigate all (decrypts all current images into a folder) |
+| V / Esc | Back to main page |
+| Q | Quit (stops daemon and exits) |
+| E | Exit (keeps daemon running) |
+
 ### Key behaviors
 - **Focused field always highlighted**: Yellow for selected, green while editing
 - **Live editing**: Changes appear in the display as you type; only applied on Enter
@@ -118,6 +137,7 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 | `%APPDATA%\self-awareness\daemon.pid` | Daemon PID (for TUI to stop it) |
 | `%APPDATA%\self-awareness\daemon.log` | Daemon error log |
 | `%APPDATA%\self-awareness\cleanup.bat` | Cleanup batch script |
+| `%APPDATA%\self-awareness\key.bin` | DPAPI-protected AES-256 master key |
 | Windows Task Scheduler | `SelfAwarenessStartup` and `SelfAwarenessCleanup` tasks |
 
 ## Git Workflow

@@ -76,13 +76,14 @@ fn run_ui(
     let mut restarting: bool = false;
     let mut restart_start: Option<std::time::Instant> = None;
     let mut viewer_state = ViewerState::new(config);
+    let mut confirm_investigate: bool = false;
 
     loop {
         terminal.draw(|frame| {
             match page {
                 Page::Main => ui(frame, config, focused_field, editing, &edit_buffer, &message, &message_timeout, confirm_restart, restarting, &restart_start),
                 Page::Tasks => tasks_ui(frame, config),
-                Page::Viewer => viewer_ui(frame, &viewer_state),
+                Page::Viewer => viewer_ui(frame, &viewer_state, confirm_investigate),
             }
         })?;
 
@@ -136,10 +137,55 @@ fn run_ui(
                     continue;
                 }
 
+                if confirm_investigate {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            let _ = daemon::stop_daemon();
+                            match viewer_state.decrypt_all() {
+                                Ok(p) => {
+                                    message = Some(format!("Decrypted to {:?}", p));
+                                    message_timeout = std::time::Instant::now();
+                                }
+                                Err(e) => {
+                                    message = Some(format!("Decrypt error: {}", e));
+                                    message_timeout = std::time::Instant::now();
+                                }
+                            }
+                            confirm_investigate = false;
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                            confirm_investigate = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                if page == Page::Viewer && viewer_state.is_searching {
+                    match key.code {
+                        KeyCode::Enter | KeyCode::Esc => {
+                            viewer_state.is_searching = false;
+                        }
+                        KeyCode::Backspace => {
+                            viewer_state.search_query.pop();
+                            viewer_state.update_filter();
+                        }
+                        KeyCode::Char(c) => {
+                            viewer_state.search_query.push(c);
+                            viewer_state.update_filter();
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 // --- VIEWER PAGE ---
                 if page == Page::Viewer {
                     match key.code {
-                        KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('V') => {
+                        KeyCode::Esc => {
+                            page = Page::Main;
+                        }
+                        KeyCode::Char('v') | KeyCode::Char('V') => {
                             page = Page::Main;
                         }
                         KeyCode::Up => {
@@ -147,6 +193,18 @@ fn run_ui(
                         }
                         KeyCode::Down => {
                             viewer_state.next();
+                        }
+                        KeyCode::PageUp => {
+                            viewer_state.page_up();
+                        }
+                        KeyCode::PageDown => {
+                            viewer_state.page_down();
+                        }
+                        KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::Char('/') => {
+                            viewer_state.is_searching = true;
+                        }
+                        KeyCode::Char('i') | KeyCode::Char('I') => {
+                            confirm_investigate = true;
                         }
                         KeyCode::Enter => {
                             if let Err(e) = viewer_state.open_selected() {
@@ -818,12 +876,13 @@ fn tasks_ui(frame: &mut ratatui::Frame, _config: &Config) {
     frame.render_widget(help, chunks[5]);
 }
 
-fn viewer_ui(frame: &mut ratatui::Frame, state: &ViewerState) {
+fn viewer_ui(frame: &mut ratatui::Frame, state: &ViewerState, confirm_investigate: bool) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),   // Title
             Constraint::Length(3),   // Summary
+            Constraint::Length(3),   // Search Bar
             Constraint::Min(10),     // List
             Constraint::Length(3),   // Help/Controls
         ])
@@ -842,14 +901,22 @@ fn viewer_ui(frame: &mut ratatui::Frame, state: &ViewerState) {
         .block(Block::default().borders(Borders::ALL).title(" Chain Status "));
     frame.render_widget(summary, chunks[1]);
 
+    // Search Bar
+    let search_style = if state.is_searching { Style::default().fg(Color::Yellow) } else { Style::default() };
+    let search_bar = Paragraph::new(format!(" Search: {}{}", state.search_query, if state.is_searching { "_" } else { "" }))
+        .style(search_style)
+        .block(Block::default().borders(Borders::ALL).title(" Filter "));
+    frame.render_widget(search_bar, chunks[2]);
+
     // List
     let mut rows = Vec::new();
     let start = state.scroll_offset;
     // We assume about 10-20 items fit in the table, rendering more than fit is okay because table cuts them off
-    let end = (start + 50).min(state.entries.len());
+    let end = (start + 50).min(state.filtered_indices.len());
 
     for i in start..end {
-        let entry = &state.entries[i];
+        let entry_idx = state.filtered_indices[i];
+        let entry = &state.all_entries[entry_idx];
         
         let status_span = match entry.chain_valid {
             Some(true) => Span::styled("✓ Intact", Style::default().fg(Color::Green)),
@@ -881,12 +948,26 @@ fn viewer_ui(frame: &mut ratatui::Frame, state: &ViewerState) {
             Span::styled("  Chain Status", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         ])
     )
-    .block(Block::default().borders(Borders::ALL).title(format!(" Captures ({}) ", state.entries.len())));
-    frame.render_widget(table, chunks[2]);
+    .block(Block::default().borders(Borders::ALL).title(format!(" Captures ({}) ", state.filtered_indices.len())));
+    frame.render_widget(table, chunks[3]);
 
     // Help
-    let help = Paragraph::new(" Up/Down: Navigate | Enter: Decrypt & Open | Esc/V: Back | Q: Quit | E: Exit ")
-        .style(Style::default().fg(Color::DarkGray))
+    let help_text = if confirm_investigate {
+        " STOP DAEMON and decrypt ALL images for investigation? [Y/N] "
+    } else if state.is_searching {
+        " Type to search | Enter/Esc: Finish typing "
+    } else {
+        " PgUp/PgDn/Up/Down: Nav | Enter: Decrypt | F: Search | I: Investigate All | V: Back | Q: Quit "
+    };
+    
+    let help_style = if confirm_investigate {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let help = Paragraph::new(help_text)
+        .style(help_style)
         .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(help, chunks[3]);
+    frame.render_widget(help, chunks[4]);
 }

@@ -15,30 +15,36 @@ pub struct ImageEntry {
 }
 
 pub struct ViewerState {
-    pub entries: Vec<ImageEntry>,
+    pub all_entries: Vec<ImageEntry>,
+    pub filtered_indices: Vec<usize>,
     pub selected_index: usize,
     pub intact_count: usize,
     pub broken_count: usize,
     pub chain_status_msg: String,
     pub scroll_offset: usize,
+    pub search_query: String,
+    pub is_searching: bool,
 }
 
 impl ViewerState {
     pub fn new(config: &Config) -> Self {
         let mut state = ViewerState {
-            entries: Vec::new(),
+            all_entries: Vec::new(),
+            filtered_indices: Vec::new(),
             selected_index: 0,
             intact_count: 0,
             broken_count: 0,
             chain_status_msg: String::new(),
             scroll_offset: 0,
+            search_query: String::new(),
+            is_searching: false,
         };
         state.refresh(config);
         state
     }
 
     pub fn refresh(&mut self, config: &Config) {
-        self.entries.clear();
+        self.all_entries.clear();
         self.intact_count = 0;
         self.broken_count = 0;
 
@@ -70,7 +76,7 @@ impl ViewerState {
                 if !is_enc && !is_img { continue; }
 
                 let timestamp_ms = parse_timestamp(&filename);
-                self.entries.push(ImageEntry {
+                self.all_entries.push(ImageEntry {
                     path,
                     filename,
                     timestamp_ms,
@@ -83,7 +89,7 @@ impl ViewerState {
         // Verify chain
         let mut prev_hash: [u8; 32] = Sha256::digest(b"self-awareness-genesis").into();
         
-        for entry in &mut self.entries {
+        for entry in &mut self.all_entries {
             if entry.is_encrypted {
                 if let Ok(data) = std::fs::read(&entry.path) {
                     if let Ok((stored_hash_opt, current_file_hash)) = crypto::get_chain_info(&data) {
@@ -117,21 +123,35 @@ impl ViewerState {
             }
         }
 
-        if self.entries.is_empty() {
+        if self.all_entries.is_empty() {
             self.chain_status_msg = "No images found.".to_string();
         } else if self.broken_count == 0 {
             self.chain_status_msg = format!("Chain intact: {} images.", self.intact_count);
         } else {
             self.chain_status_msg = format!("Chain broken: {} intact, {} broken.", self.intact_count, self.broken_count);
         }
+
+        self.update_filter();
+    }
+
+    pub fn update_filter(&mut self) {
+        self.filtered_indices.clear();
+        let query = self.search_query.to_lowercase();
+        for (i, entry) in self.all_entries.iter().enumerate() {
+            if query.is_empty() || entry.filename.to_lowercase().contains(&query) {
+                self.filtered_indices.push(i);
+            }
+        }
+        self.selected_index = 0;
+        self.scroll_offset = 0;
     }
 
     pub fn open_selected(&self) -> Result<()> {
-        if self.entries.is_empty() || self.selected_index >= self.entries.len() {
+        if self.filtered_indices.is_empty() || self.selected_index >= self.filtered_indices.len() {
             return Ok(());
         }
 
-        let entry = &self.entries[self.selected_index];
+        let entry = &self.all_entries[self.filtered_indices[self.selected_index]];
         if !entry.is_encrypted {
             open_file(&entry.path)?;
             return Ok(());
@@ -152,20 +172,56 @@ impl ViewerState {
         Ok(())
     }
 
+    pub fn decrypt_all(&self) -> Result<PathBuf> {
+        let dest_dir = crate::config::app_dir().join("decrypted_investigation");
+        std::fs::create_dir_all(&dest_dir)?;
+
+        let key = crypto::load_key()?;
+        for entry in &self.all_entries {
+            if entry.is_encrypted {
+                if let Ok(data) = std::fs::read(&entry.path) {
+                    if let Ok((plaintext, format, _)) = crypto::decrypt_image(&key, &data) {
+                        let out_path = dest_dir.join(format!("{}.{}", entry.filename, format.extension()));
+                        let _ = std::fs::write(out_path, plaintext);
+                    }
+                }
+            } else {
+                let _ = std::fs::copy(&entry.path, dest_dir.join(&entry.filename));
+            }
+        }
+
+        open_file(&dest_dir)?;
+        Ok(dest_dir)
+    }
+
     pub fn next(&mut self) {
-        if !self.entries.is_empty() {
-            self.selected_index = (self.selected_index + 1) % self.entries.len();
+        if !self.filtered_indices.is_empty() {
+            self.selected_index = (self.selected_index + 1) % self.filtered_indices.len();
             self.adjust_scroll();
         }
     }
 
     pub fn previous(&mut self) {
-        if !self.entries.is_empty() {
+        if !self.filtered_indices.is_empty() {
             if self.selected_index == 0 {
-                self.selected_index = self.entries.len() - 1;
+                self.selected_index = self.filtered_indices.len() - 1;
             } else {
                 self.selected_index -= 1;
             }
+            self.adjust_scroll();
+        }
+    }
+
+    pub fn page_up(&mut self) {
+        if !self.filtered_indices.is_empty() {
+            self.selected_index = self.selected_index.saturating_sub(10);
+            self.adjust_scroll();
+        }
+    }
+
+    pub fn page_down(&mut self) {
+        if !self.filtered_indices.is_empty() {
+            self.selected_index = (self.selected_index + 10).min(self.filtered_indices.len() - 1);
             self.adjust_scroll();
         }
     }
