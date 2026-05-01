@@ -12,6 +12,7 @@ pub struct ImageEntry {
     pub timestamp_ms: Option<i64>,
     pub is_encrypted: bool,
     pub chain_valid: Option<bool>, // None = no chain, Some(true) = intact, Some(false) = broken
+    pub gap_duration_ms: Option<i64>,
 }
 
 pub struct ViewerState {
@@ -67,6 +68,8 @@ impl ViewerState {
         // Sort by name (which contains timestamp %Y%m%d_%H%M%S) so older is first
         files.sort();
 
+        let mut prev_ts: Option<i64> = None;
+
         for path in files {
             let filename_opt = path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
             if let Some(filename) = filename_opt {
@@ -76,12 +79,24 @@ impl ViewerState {
                 if !is_enc && !is_img { continue; }
 
                 let timestamp_ms = parse_timestamp(&filename);
+                let mut gap_duration_ms = None;
+                if let (Some(curr), Some(prev)) = (timestamp_ms, prev_ts) {
+                    let diff = curr - prev;
+                    if diff > config.interval_seconds as i64 * 1000 * 2 {
+                        gap_duration_ms = Some(diff);
+                    }
+                }
+                if timestamp_ms.is_some() {
+                    prev_ts = timestamp_ms;
+                }
+
                 self.all_entries.push(ImageEntry {
                     path,
                     filename,
                     timestamp_ms,
                     is_encrypted: is_enc,
                     chain_valid: None,
+                    gap_duration_ms,
                 });
             }
         }
@@ -146,7 +161,7 @@ impl ViewerState {
         self.scroll_offset = 0;
     }
 
-    pub fn open_selected(&self) -> Result<()> {
+    pub fn open_selected(&self, config: &Config) -> Result<()> {
         if self.filtered_indices.is_empty() || self.selected_index >= self.filtered_indices.len() {
             return Ok(());
         }
@@ -159,7 +174,7 @@ impl ViewerState {
 
         // Decrypt to temp file and open
         let data = std::fs::read(&entry.path)?;
-        let key = crypto::load_key()?;
+        let key = crypto::load_key(config.current_passphrase.as_deref())?;
         let (plaintext, format, _) = crypto::decrypt_image(&key, &data)?;
 
         let temp_dir = std::env::temp_dir().join("self-awareness");
@@ -172,11 +187,11 @@ impl ViewerState {
         Ok(())
     }
 
-    pub fn decrypt_all(&self) -> Result<PathBuf> {
+    pub fn decrypt_all(&self, config: &Config) -> Result<PathBuf> {
         let dest_dir = crate::config::app_dir().join("decrypted_investigation");
         std::fs::create_dir_all(&dest_dir)?;
 
-        let key = crypto::load_key()?;
+        let key = crypto::load_key(config.current_passphrase.as_deref())?;
         for entry in &self.all_entries {
             if entry.is_encrypted {
                 if let Ok(data) = std::fs::read(&entry.path) {

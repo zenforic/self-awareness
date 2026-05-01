@@ -14,6 +14,7 @@ pub fn capture_and_save(
     encrypt: bool,
     hash_chain: bool,
     mut prev_chain_hash: Option<&mut [u8; 32]>,
+    passphrase: Option<&str>,
 ) -> Result<()> {
     std::fs::create_dir_all(output_dir)?;
 
@@ -28,7 +29,7 @@ pub fn capture_and_save(
     let timestamp_ms = now.timestamp_millis();
 
     if encrypt {
-        let key = crypto::load_key()?;
+        let key = crypto::load_key(passphrase)?;
         let encoded = encode_to_bytes(&dyn_img, format)?;
         
         let (encrypted, new_hash) = crypto::encrypt_image(

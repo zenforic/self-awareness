@@ -141,7 +141,7 @@ fn run_ui(
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             let _ = daemon::stop_daemon();
-                            match viewer_state.decrypt_all() {
+                            match viewer_state.decrypt_all(config) {
                                 Ok(p) => {
                                     message = Some(format!("Decrypted to {:?}", p));
                                     message_timeout = std::time::Instant::now();
@@ -207,7 +207,7 @@ fn run_ui(
                             confirm_investigate = true;
                         }
                         KeyCode::Enter => {
-                            if let Err(e) = viewer_state.open_selected() {
+                            if let Err(e) = viewer_state.open_selected(config) {
                                 message = Some(format!("Viewer error: {}", e));
                                 message_timeout = std::time::Instant::now();
                             }
@@ -243,25 +243,29 @@ fn run_ui(
                         }
                         KeyCode::Tab => {
                             // In edit mode, Tab moves to next field and starts editing it
-                            focused_field = (focused_field + 1) % 5;
+                            focused_field = (focused_field + 1) % 7;
                             edit_buffer = match focused_field {
                                 0 => config.interval_seconds.to_string(),
                                 1 => config.max_disk_mb.to_string(),
                                 2 => config.output_dir.clone(),
                                 3 => config.image_format.label().to_string(),
                                 4 => config.retention_days.to_string(),
+                                5 => (if config.encrypt_images { "Yes" } else { "No" }).to_string(),
+                                6 => (if config.hash_chain { "Yes" } else { "No" }).to_string(),
                                 _ => String::new(),
                             };
                         }
                         KeyCode::BackTab => {
                             // In edit mode, BackTab moves to previous field and starts editing it
-                            focused_field = if focused_field == 0 { 4 } else { focused_field - 1 };
+                            focused_field = if focused_field == 0 { 6 } else { focused_field - 1 };
                             edit_buffer = match focused_field {
                                 0 => config.interval_seconds.to_string(),
                                 1 => config.max_disk_mb.to_string(),
                                 2 => config.output_dir.clone(),
                                 3 => config.image_format.label().to_string(),
                                 4 => config.retention_days.to_string(),
+                                5 => (if config.encrypt_images { "Yes" } else { "No" }).to_string(),
+                                6 => (if config.hash_chain { "Yes" } else { "No" }).to_string(),
                                 _ => String::new(),
                             };
                         }
@@ -320,14 +324,19 @@ fn run_ui(
                             let _ = daemon::stop_daemon();
                             
                             #[cfg(target_os = "windows")]
-                            let child = std::process::Command::new(&exe_path)
-                                .arg("--daemon")
-                                .creation_flags(0x00000008) // DETACHED_PROCESS — not attached to TUI console
-                                .spawn();
+                            let mut cmd = std::process::Command::new(&exe_path);
+                            #[cfg(target_os = "windows")]
+                            cmd.arg("--daemon").creation_flags(0x00000008);
+                            
                             #[cfg(not(target_os = "windows"))]
-                            let child = std::process::Command::new(&exe_path)
-                                .arg("--daemon")
-                                .spawn();
+                            let mut cmd = std::process::Command::new(&exe_path);
+                            #[cfg(not(target_os = "windows"))]
+                            cmd.arg("--daemon");
+                            
+                            if let Some(pass) = &config.current_passphrase {
+                                cmd.env("SAW_PASSPHRASE", pass);
+                            }
+                            let child = cmd.spawn();
 
                             match child {
                                 Ok(_child) => {
@@ -411,6 +420,8 @@ fn run_ui(
                             2 => config.output_dir.clone(),
                             3 => config.image_format.label().to_string(),
                             4 => config.retention_days.to_string(),
+                            5 => (if config.encrypt_images { "Yes" } else { "No" }).to_string(),
+                            6 => (if config.hash_chain { "Yes" } else { "No" }).to_string(),
                             _ => String::new(),
                         };
                     }
@@ -419,10 +430,10 @@ fn run_ui(
                         return Ok(TuiAction::QuitNoStop);
                     }
                     KeyCode::Tab => {
-                        focused_field = (focused_field + 1) % 5;
+                        focused_field = (focused_field + 1) % 7;
                     }
                     KeyCode::BackTab => {
-                        focused_field = if focused_field == 0 { 4 } else { focused_field - 1 };
+                        focused_field = if focused_field == 0 { 6 } else { focused_field - 1 };
                     }
                     _ => {}
                 }
@@ -436,14 +447,19 @@ fn run_ui(
                     // Start the new daemon
                     let exe_path = std::env::current_exe().unwrap();
                     #[cfg(target_os = "windows")]
-                    let child = std::process::Command::new(&exe_path)
-                        .arg("--daemon")
-                        .creation_flags(0x00000008) // DETACHED_PROCESS
-                        .spawn();
+                    let mut cmd = std::process::Command::new(&exe_path);
+                    #[cfg(target_os = "windows")]
+                    cmd.arg("--daemon").creation_flags(0x00000008);
+                    
                     #[cfg(not(target_os = "windows"))]
-                    let child = std::process::Command::new(&exe_path)
-                        .arg("--daemon")
-                        .spawn();
+                    let mut cmd = std::process::Command::new(&exe_path);
+                    #[cfg(not(target_os = "windows"))]
+                    cmd.arg("--daemon");
+                    
+                    if let Some(pass) = &config.current_passphrase {
+                        cmd.env("SAW_PASSPHRASE", pass);
+                    }
+                    let child = cmd.spawn();
 
                     match child {
                         Ok(_child) => {
@@ -482,7 +498,7 @@ fn ui(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),   // Title
-            Constraint::Length(9),   // Settings
+            Constraint::Length(11),   // Settings
             Constraint::Length(3),   // Checkbox
             Constraint::Length(4),   // Status
             Constraint::Length(3),   // Buttons
@@ -529,6 +545,16 @@ fn ui(
             format!("{} days [{}]", config.retention_days, edit_buffer)
         } else {
             format!("{} days", config.retention_days)
+        },
+        if focused_field == 5 && editing {
+            if config.encrypt_images { "Yes".to_string() } else { "No".to_string() }
+        } else {
+            if config.encrypt_images { "Yes".to_string() } else { "No".to_string() }
+        },
+        if focused_field == 6 && editing {
+            if config.hash_chain { "Yes".to_string() } else { "No".to_string() }
+        } else {
+            if config.hash_chain { "Yes".to_string() } else { "No".to_string() }
         },
     ];
 
@@ -582,6 +608,28 @@ fn ui(
             Span::styled(
                 &field_values[4],
                 if focused_field == 4 {
+                    if editing { editing_style } else { focused_style }
+                } else {
+                    normal_style
+                },
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Encrypt:     ", normal_style),
+            Span::styled(
+                &field_values[5],
+                if focused_field == 5 {
+                    if editing { editing_style } else { focused_style }
+                } else {
+                    normal_style
+                },
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Hash Chain:  ", normal_style),
+            Span::styled(
+                &field_values[6],
+                if focused_field == 6 {
                     if editing { editing_style } else { focused_style }
                 } else {
                     normal_style
@@ -761,6 +809,12 @@ fn apply_edit(config: &mut Config, field: usize, buffer: &str) {
                 config.retention_days = val.max(1);
             }
         }
+        5 => {
+            config.encrypt_images = !config.encrypt_images;
+        }
+        6 => {
+            config.hash_chain = !config.hash_chain;
+        }
         _ => {}
     }
 }
@@ -924,6 +978,20 @@ fn viewer_ui(frame: &mut ratatui::Frame, state: &ViewerState, confirm_investigat
             None => Span::styled("- None", Style::default().fg(Color::DarkGray)),
         };
 
+        let gap_span = match entry.gap_duration_ms {
+            Some(ms) => {
+                let secs = ms / 1000;
+                let mins = secs / 60;
+                let hours = mins / 60;
+                if hours > 0 {
+                    Span::styled(format!("Gap: {}h{}m", hours, mins % 60), Style::default().fg(Color::Yellow))
+                } else {
+                    Span::styled(format!("Gap: {}m", mins), Style::default().fg(Color::Yellow))
+                }
+            },
+            None => Span::raw(""),
+        };
+
         let style = if i == state.selected_index {
             Style::default().fg(Color::Black).bg(Color::Yellow)
         } else {
@@ -933,6 +1001,7 @@ fn viewer_ui(frame: &mut ratatui::Frame, state: &ViewerState, confirm_investigat
         let row = Row::new(vec![
             Span::styled(entry.filename.clone(), style),
             status_span,
+            gap_span,
         ]).style(style);
         
         rows.push(row);
@@ -940,12 +1009,13 @@ fn viewer_ui(frame: &mut ratatui::Frame, state: &ViewerState, confirm_investigat
 
     let table = Table::new(
         rows,
-        [Constraint::Percentage(70), Constraint::Percentage(30)],
+        [Constraint::Percentage(50), Constraint::Percentage(25), Constraint::Percentage(25)],
     )
     .header(
         Row::new(vec![
             Span::styled("  Filename", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::styled("  Chain Status", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("  Notes", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         ])
     )
     .block(Block::default().borders(Borders::ALL).title(format!(" Captures ({}) ", state.filtered_indices.len())));
