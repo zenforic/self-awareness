@@ -18,6 +18,7 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub hash_chain: bool,
     /// Argon2 password hash for TUI login, if set.
+    #[serde(default)]
     pub tui_passphrase_hash: Option<String>,
     #[serde(skip)]
     pub current_passphrase: Option<String>,
