@@ -122,9 +122,8 @@ pub fn set_passphrase(old_passphrase: Option<&str>, new_passphrase: Option<&str>
 
 /// Generate a random 256-bit (32-byte) master key.
 fn generate_key() -> Vec<u8> {
-    let mut key = vec![0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key);
-    key
+    use aes_gcm::aead::OsRng;
+    Aes256Gcm::generate_key(&mut OsRng).to_vec()
 }
 
 /// Derive a 32-byte key from a passphrase and salt using Argon2id.
@@ -253,13 +252,12 @@ fn decrypt_dpapi(_data: &[u8]) -> Result<Vec<u8>> {
 fn encrypt_aes(key: &[u8], plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
 
-    let mut nonce = [0u8; NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut nonce);
-    let nonce = Nonce::from_slice(&nonce);
+    use aes_gcm::aead::{AeadCore, OsRng};
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
     let mut buffer = plaintext.to_vec();
     cipher
-        .encrypt_in_place(nonce, b"", &mut buffer)
+        .encrypt_in_place(&nonce, b"", &mut buffer)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     Ok((nonce.to_vec(), buffer))
