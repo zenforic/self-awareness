@@ -21,12 +21,14 @@ use crate::config::{self, Config, ImageFormat};
 use crate::daemon;
 use crate::startup;
 use crate::cleanup;
+use crate::viewer::ViewerState;
 
 /// Which page the TUI is currently showing.
 #[derive(Debug, PartialEq)]
 enum Page {
     Main,
     Tasks,
+    Viewer,
 }
 
 /// Action returned by the TUI after the user exits.
@@ -73,12 +75,14 @@ fn run_ui(
     let mut confirm_restart: bool = false;
     let mut restarting: bool = false;
     let mut restart_start: Option<std::time::Instant> = None;
+    let mut viewer_state = ViewerState::new(config);
 
     loop {
         terminal.draw(|frame| {
             match page {
                 Page::Main => ui(frame, config, focused_field, editing, &edit_buffer, &message, &message_timeout, confirm_restart, restarting, &restart_start),
                 Page::Tasks => tasks_ui(frame, config),
+                Page::Viewer => viewer_ui(frame, &viewer_state),
             }
         })?;
 
@@ -125,6 +129,36 @@ fn run_ui(
                         }
                         KeyCode::Char('e') | KeyCode::Char('E') => {
                             // Exit without stopping daemon
+                            return Ok(TuiAction::QuitNoStop);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // --- VIEWER PAGE ---
+                if page == Page::Viewer {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('V') => {
+                            page = Page::Main;
+                        }
+                        KeyCode::Up => {
+                            viewer_state.previous();
+                        }
+                        KeyCode::Down => {
+                            viewer_state.next();
+                        }
+                        KeyCode::Enter => {
+                            if let Err(e) = viewer_state.open_selected() {
+                                message = Some(format!("Viewer error: {}", e));
+                                message_timeout = std::time::Instant::now();
+                            }
+                        }
+                        KeyCode::Char('q') | KeyCode::Char('Q') => {
+                            let _ = daemon::stop_daemon();
+                            return Ok(TuiAction::Quit);
+                        }
+                        KeyCode::Char('e') | KeyCode::Char('E') => {
                             return Ok(TuiAction::QuitNoStop);
                         }
                         _ => {}
@@ -304,6 +338,11 @@ fn run_ui(
                     KeyCode::Char('t') | KeyCode::Char('T') => {
                         // Switch to tasks page
                         page = Page::Tasks;
+                    }
+                    KeyCode::Char('v') | KeyCode::Char('V') => {
+                        // Switch to viewer page
+                        viewer_state.refresh(config);
+                        page = Page::Viewer;
                     }
                     KeyCode::Enter => {
                         // Start editing the focused field
@@ -594,6 +633,7 @@ fn ui(
                 Span::styled(" [X] Stop  ", normal_style),
                 Span::styled(" [C] Boot  ", normal_style),
                 Span::styled(" [T]asks  ", normal_style),
+                Span::styled(" [V]iewer  ", normal_style),
                 Span::styled(" [Q]uit  ", normal_style),
             ]),
         ])
@@ -776,4 +816,77 @@ fn tasks_ui(frame: &mut ratatui::Frame, _config: &Config) {
     let help = Paragraph::new(" Esc/T: Back to main | S: Toggle startup | C: Toggle cleanup | A: Clear all")
         .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(help, chunks[5]);
+}
+
+fn viewer_ui(frame: &mut ratatui::Frame, state: &ViewerState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),   // Title
+            Constraint::Length(3),   // Summary
+            Constraint::Min(10),     // List
+            Constraint::Length(3),   // Help/Controls
+        ])
+        .split(frame.area());
+
+    // Title
+    let title = Paragraph::new(" Encrypted Viewer ")
+        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(title, chunks[0]);
+
+    // Summary
+    let summary_color = if state.broken_count > 0 { Color::Red } else { Color::Green };
+    let summary = Paragraph::new(format!("  {}", state.chain_status_msg))
+        .style(Style::default().fg(summary_color).add_modifier(Modifier::BOLD))
+        .block(Block::default().borders(Borders::ALL).title(" Chain Status "));
+    frame.render_widget(summary, chunks[1]);
+
+    // List
+    let mut rows = Vec::new();
+    let start = state.scroll_offset;
+    // We assume about 10-20 items fit in the table, rendering more than fit is okay because table cuts them off
+    let end = (start + 50).min(state.entries.len());
+
+    for i in start..end {
+        let entry = &state.entries[i];
+        
+        let status_span = match entry.chain_valid {
+            Some(true) => Span::styled("✓ Intact", Style::default().fg(Color::Green)),
+            Some(false) => Span::styled("✗ Broken", Style::default().fg(Color::Red)),
+            None => Span::styled("- None", Style::default().fg(Color::DarkGray)),
+        };
+
+        let style = if i == state.selected_index {
+            Style::default().fg(Color::Black).bg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+
+        let row = Row::new(vec![
+            Span::styled(entry.filename.clone(), style),
+            status_span,
+        ]).style(style);
+        
+        rows.push(row);
+    }
+
+    let table = Table::new(
+        rows,
+        [Constraint::Percentage(70), Constraint::Percentage(30)],
+    )
+    .header(
+        Row::new(vec![
+            Span::styled("  Filename", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("  Chain Status", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ])
+    )
+    .block(Block::default().borders(Borders::ALL).title(format!(" Captures ({}) ", state.entries.len())));
+    frame.render_widget(table, chunks[2]);
+
+    // Help
+    let help = Paragraph::new(" Up/Down: Navigate | Enter: Decrypt & Open | Esc/V: Back | Q: Quit | E: Exit ")
+        .style(Style::default().fg(Color::DarkGray))
+        .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(help, chunks[3]);
 }

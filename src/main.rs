@@ -6,6 +6,7 @@ mod startup;
 mod cleanup;
 mod elevate;
 mod tui;
+mod viewer;
 
 use std::env;
 

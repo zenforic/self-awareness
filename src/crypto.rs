@@ -293,6 +293,35 @@ pub fn decrypt_image(key: &[u8], data: &[u8]) -> Result<(Vec<u8>, ImageFormat, O
     Ok((plaintext, format, chain_hash))
 }
 
+/// Extracts the chain hash and computes the current file hash for verification.
+/// Returns `(stored_chain_hash, computed_current_file_hash)`
+pub fn get_chain_info(data: &[u8]) -> Result<(Option<[u8; 32]>, [u8; 32])> {
+    if data.len() < NONCE_OFFSET + NONCE_LEN {
+        anyhow::bail!("File too small");
+    }
+    if data[..4] != MAGIC {
+        anyhow::bail!("Invalid magic");
+    }
+    let raw_format = data[FORMAT_OFFSET];
+    let hl = header_len(raw_format);
+    if data.len() < hl {
+        anyhow::bail!("File too small for header");
+    }
+
+    let has_chain = (raw_format & FLAG_HASH_CHAIN) != 0;
+    let mut chain_hash = None;
+    if has_chain {
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&data[NONCE_OFFSET + NONCE_LEN .. hl]);
+        chain_hash = Some(h);
+    }
+
+    let ciphertext = &data[hl..];
+    let current_file_hash = Sha256::digest(ciphertext).into();
+
+    Ok((chain_hash, current_file_hash))
+}
+
 /// Detect whether a file is an encrypted self-awareness file by checking
 /// the first 4 bytes. Returns `true` if the magic bytes match.
 pub fn is_encrypted_file(data: &[u8]) -> bool {
