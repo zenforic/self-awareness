@@ -59,18 +59,65 @@ fn key_path() -> PathBuf {
 // Master key management (DPAPI)
 // ---------------------------------------------------------------------------
 
-/// Load the master key from disk, decrypting it with DPAPI.
-/// If the key file does not exist, generates a new one.
-pub fn load_key() -> Result<Vec<u8>> {
+/// The magic bytes indicating the master key is protected by a passphrase
+const KEY_MAGIC: &[u8; 4] = b"SAWP";
+
+/// Check if the master key requires a passphrase.
+pub fn needs_passphrase() -> Result<bool> {
     let path = key_path();
-    if path.exists() {
-        let protected = std::fs::read(&path)?;
-        Ok(decrypt_dpapi(&protected)?)
-    } else {
-        let key = generate_key();
-        save_key(&key)?;
-        Ok(key)
+    if !path.exists() {
+        return Ok(false);
     }
+    let protected = std::fs::read(&path)?;
+    let decrypted = decrypt_dpapi(&protected)?;
+    if decrypted.len() >= 4 && &decrypted[0..4] == KEY_MAGIC {
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Load the master key from disk, decrypting it with DPAPI and optionally a passphrase.
+/// If the key file does not exist, generates a new one.
+pub fn load_key(passphrase: Option<&str>) -> Result<Vec<u8>> {
+    let path = key_path();
+    if !path.exists() {
+        let key = generate_key();
+        save_key(&key, passphrase)?;
+        return Ok(key);
+    }
+    
+    let protected = std::fs::read(&path)?;
+    let decrypted = decrypt_dpapi(&protected)?;
+    
+    if decrypted.len() >= 4 && &decrypted[0..4] == KEY_MAGIC {
+        // Requires passphrase
+        let pass = passphrase.ok_or_else(|| anyhow::anyhow!("PassphraseRequired"))?;
+        if decrypted.len() != 80 {
+            anyhow::bail!("Invalid key file format length");
+        }
+        let salt = &decrypted[4..20];
+        let nonce = &decrypted[20..32];
+        let ciphertext = &decrypted[32..];
+        
+        let derived_key = derive_key(pass, salt)?;
+        let master_key = decrypt_aes(&derived_key, nonce, ciphertext)?;
+        Ok(master_key)
+    } else {
+        // No passphrase
+        if decrypted.len() == 32 {
+            Ok(decrypted)
+        } else {
+            anyhow::bail!("Invalid key file length")
+        }
+    }
+}
+
+/// Change or remove the passphrase protecting the master key.
+pub fn set_passphrase(old_passphrase: Option<&str>, new_passphrase: Option<&str>) -> Result<()> {
+    let master_key = load_key(old_passphrase)?;
+    save_key(&master_key, new_passphrase)?;
+    Ok(())
 }
 
 /// Generate a random 256-bit (32-byte) master key.
@@ -80,10 +127,37 @@ fn generate_key() -> Vec<u8> {
     key
 }
 
-/// Encrypt the master key with DPAPI and write it to disk.
-fn save_key(key: &[u8]) -> Result<()> {
+/// Derive a 32-byte key from a passphrase and salt using Argon2id.
+fn derive_key(passphrase: &str, salt: &[u8]) -> Result<Vec<u8>> {
+    use argon2::{Argon2, Algorithm, Version, Params};
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
+    let mut derived_key = [0u8; 32];
+    argon2.hash_password_into(passphrase.as_bytes(), salt, &mut derived_key).map_err(|e| anyhow::anyhow!("Argon2 error: {}", e))?;
+    Ok(derived_key.to_vec())
+}
+
+/// Encrypt the master key with DPAPI (and optionally a passphrase) and write it to disk.
+fn save_key(key: &[u8], passphrase: Option<&str>) -> Result<()> {
     let path = key_path();
-    let protected = encrypt_dpapi(key, None)?;
+    
+    let payload = if let Some(pass) = passphrase {
+        let mut salt = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut salt);
+        
+        let derived_key = derive_key(pass, &salt)?;
+        let (nonce, ciphertext) = encrypt_aes(&derived_key, key)?;
+        
+        let mut out = Vec::with_capacity(4 + 16 + nonce.len() + ciphertext.len());
+        out.extend_from_slice(KEY_MAGIC);
+        out.extend_from_slice(&salt);
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&ciphertext);
+        out
+    } else {
+        key.to_vec()
+    };
+    
+    let protected = encrypt_dpapi(&payload, None)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

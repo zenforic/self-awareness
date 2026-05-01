@@ -27,6 +27,8 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Dxgi",
 ]}
 sha2 = "0.11.0"
+argon2 = { version = "0.5.3", features = ["alloc"] }
+rpassword = "7.5.1"
 
 [profile.release]
 opt-level = 3

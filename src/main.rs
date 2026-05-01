@@ -65,6 +65,27 @@ fn acquire_daemon_mutex() -> bool {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    
+    // Handle setting a passphrase via CLI
+    let set_pass = args.iter().any(|a| a == "--set-passphrase");
+    if set_pass {
+        let needs = crypto::needs_passphrase().unwrap_or(false);
+        let old_pass = if needs {
+            Some(rpassword::prompt_password("Enter current passphrase: ").unwrap_or_default())
+        } else {
+            None
+        };
+        let new_pass = rpassword::prompt_password("Enter NEW passphrase (empty to disable): ").unwrap_or_default();
+        let new_pass_opt = if new_pass.trim().is_empty() { None } else { Some(new_pass.as_str()) };
+        
+        let old_pass_opt = old_pass.as_deref();
+        match crypto::set_passphrase(old_pass_opt, new_pass_opt) {
+            Ok(_) => println!("Passphrase updated successfully."),
+            Err(e) => eprintln!("Failed to update passphrase: {}", e),
+        }
+        return;
+    }
+
     let tui_mode = args.iter().any(|a| a == "--tui" || a == "-t");
     let daemon_mode = args.iter().any(|a| a == "--daemon" || a == "-d");
 
@@ -72,24 +93,27 @@ fn main() {
     let app_dir = config::app_dir();
     let _ = std::fs::create_dir_all(&app_dir);
 
+    // Retrieve passphrase from env, or prompt if needed in TUI mode
+    let env_pass = std::env::var("SAW_PASSPHRASE").ok();
+
     if daemon_mode {
         // Explicit daemon mode — run as daemon directly (no mutex check needed)
         hide_console();
-        run_daemon_application();
+        run_daemon_application(env_pass);
     } else if tui_mode {
         // Always show TUI when requested
-        run_tui_application();
+        run_tui_wrapper(env_pass);
     } else {
         // Normal startup: check PID file first to detect running daemon
         let daemon_running = daemon::is_daemon_running();
         if daemon_running {
             // A daemon is already running — show TUI to manage it
-            run_tui_application();
+            run_tui_wrapper(env_pass);
         } else {
             // No running daemon — try to acquire mutex and start one
             if acquire_daemon_mutex() {
                 hide_console();
-                run_daemon_application();
+                run_daemon_application(env_pass);
             } else {
                 // Mutex is held, but PID file is missing or stale.
                 // This means a zombie daemon is running! Kill it and try again.
@@ -100,19 +124,40 @@ fn main() {
 
                 if acquire_daemon_mutex() {
                     hide_console();
-                    run_daemon_application();
+                    run_daemon_application(env_pass);
                 } else {
                     // Another instance is running and couldn't be killed — show TUI
-                    run_tui_application();
+                    run_tui_wrapper(env_pass);
                 }
             }
         }
     }
 }
 
-fn run_tui_application() {
+fn run_tui_wrapper(env_pass: Option<String>) {
+    let mut pass = env_pass;
+    if pass.is_none() && crypto::needs_passphrase().unwrap_or(false) {
+        if let Ok(p) = rpassword::prompt_password("Enter passphrase to unlock Self-Awareness: ") {
+            // Verify passphrase before launching TUI
+            if let Err(e) = crypto::load_key(Some(&p)) {
+                eprintln!("Invalid passphrase or key error: {}", e);
+                return;
+            }
+            pass = Some(p);
+        } else {
+            eprintln!("Failed to read passphrase.");
+            return;
+        }
+    }
+    run_tui_application(pass);
+}
+
+fn run_tui_application(passphrase: Option<String>) {
     let mut config = match config::Config::load() {
-        Ok(c) => c,
+        Ok(mut c) => {
+            c.current_passphrase = passphrase;
+            c
+        },
         Err(e) => {
             eprintln!("Failed to load config: {}", e);
             return;
@@ -141,9 +186,12 @@ fn run_tui_application() {
     }
 }
 
-fn run_daemon_application() {
+fn run_daemon_application(passphrase: Option<String>) {
     let config = match config::Config::load() {
-        Ok(c) => c,
+        Ok(mut c) => {
+            c.current_passphrase = passphrase;
+            c
+        },
         Err(e) => {
             eprintln!("Failed to load config: {}", e);
             return;

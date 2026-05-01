@@ -64,6 +64,7 @@ The release profile enables LTO, dead-code stripping, and maximum optimisation f
 self-awareness.exe           # Auto-detect mode (see below)
 self-awareness.exe --tui     # Force TUI (short: -t)
 self-awareness.exe --daemon  # Force daemon (short: -d)
+self-awareness.exe --set-passphrase # Add/Remove an optional passphrase for the encryption key
 ```
 
 ### Auto-detect mode
@@ -194,6 +195,14 @@ Self-Awareness features a robust, zero-friction encryption system designed to pr
 
 ### AES-256-GCM + DPAPI
 When `encrypt_images` is enabled, images are encrypted at rest using a 256-bit AES-GCM key. This master key is generated securely on first run and protected by **Windows DPAPI** (Data Protection API), tying it directly to your Windows user account. Even if another user or process accesses your hard drive or copies the files, they cannot decrypt the images without being logged into your Windows session.
+
+### Optional Passphrase
+As an additional layer of security beyond DPAPI, you can protect the master encryption key with a passphrase. To set or remove a passphrase, run:
+```bash
+self-awareness.exe --set-passphrase
+```
+The master key is then wrapped using an Argon2-derived key alongside DPAPI. 
+> **Important:** Adding a passphrase means the daemon will require it to start. The daemon cannot capture screenshots unattended automatically at boot if a passphrase is set. You will be prompted for it when opening the TUI, and the TUI will securely pass it to the background daemon.
 
 ### Hash Chain Tamper Detection
 When `hash_chain` is enabled, each image contains a cryptographic sequence hash. The hash formula is `SHA-256(prev_chain_hash || current_file_hash || timestamp)`.

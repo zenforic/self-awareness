@@ -30,6 +30,7 @@ pub fn run(config: &Config) -> Result<()> {
             config.encrypt_images,
             config.hash_chain,
             prev_chain_hash.as_mut(),
+            config.current_passphrase.as_deref(),
         ) {
             log_message(&format!("Capture error: {}", e));
         }

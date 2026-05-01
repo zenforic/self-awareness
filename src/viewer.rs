@@ -146,7 +146,7 @@ impl ViewerState {
         self.scroll_offset = 0;
     }
 
-    pub fn open_selected(&self) -> Result<()> {
+    pub fn open_selected(&self, config: &Config) -> Result<()> {
         if self.filtered_indices.is_empty() || self.selected_index >= self.filtered_indices.len() {
             return Ok(());
         }
@@ -159,7 +159,7 @@ impl ViewerState {
 
         // Decrypt to temp file and open
         let data = std::fs::read(&entry.path)?;
-        let key = crypto::load_key()?;
+        let key = crypto::load_key(config.current_passphrase.as_deref())?;
         let (plaintext, format, _) = crypto::decrypt_image(&key, &data)?;
 
         let temp_dir = std::env::temp_dir().join("self-awareness");
@@ -172,11 +172,11 @@ impl ViewerState {
         Ok(())
     }
 
-    pub fn decrypt_all(&self) -> Result<PathBuf> {
+    pub fn decrypt_all(&self, config: &Config) -> Result<PathBuf> {
         let dest_dir = crate::config::app_dir().join("decrypted_investigation");
         std::fs::create_dir_all(&dest_dir)?;
 
-        let key = crypto::load_key()?;
+        let key = crypto::load_key(config.current_passphrase.as_deref())?;
         for entry in &self.all_entries {
             if entry.is_encrypted {
                 if let Ok(data) = std::fs::read(&entry.path) {

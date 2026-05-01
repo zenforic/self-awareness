@@ -17,6 +17,8 @@ pub struct Config {
     /// Whether to embed a hash chain for tamper detection
     #[serde(default = "default_true")]
     pub hash_chain: bool,
+    #[serde(skip)]
+    pub current_passphrase: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -42,6 +44,7 @@ impl Default for Config {
             start_on_boot: false,
             encrypt_images: true,
             hash_chain: true,
+            current_passphrase: None,
         }
     }
 }

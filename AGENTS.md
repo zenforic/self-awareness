@@ -22,6 +22,7 @@ A stealth screen-logging daemon for monitoring PC access while away. Runs invisi
 | `self-awareness.exe` | Checks PID file: if daemon running → TUI (re-attach); if PID stale → TUI (stopped); else tries mutex → daemon or TUI |
 | `self-awareness.exe --tui` | Always shows TUI (reattaches if daemon running) |
 | `self-awareness.exe --daemon` | Always runs as daemon (bypasses all checks) |
+| `self-awareness.exe --set-passphrase` | CLI prompt to set, change, or remove the optional passphrase protecting the master key |
 
 ### Startup Flow
 | Scenario | Behavior |
@@ -37,6 +38,7 @@ A stealth screen-logging daemon for monitoring PC access while away. Runs invisi
 - Only one instance runs at a time (named mutex: `SelfAwarenessDaemon`)
 - Data never lost on shutdown — images written immediately to disk
 - GDI BitBlt screen capture (no nightly Rust, no external dependencies)
+- If a passphrase is set via `--set-passphrase`, the background daemon (started at boot) will gracefully fail to start without hanging or creating windows, honoring the stealth configuration constraints.
 
 ### Startup Persistence
 - Uses Windows Task Scheduler (`schtasks /Create`) to create `SelfAwarenessStartup` task at logon
@@ -65,6 +67,8 @@ cargo build --release  # Release build (production)
 - `aes-gcm` — Encryption at rest
 - `sha2` — Tamper detection hash chain
 - `rand` — Secure random generation
+- `argon2` — Passphrase key derivation
+- `rpassword` — Secure CLI password prompting
 
 ## Configuration
 Stored in `%APPDATA%\self-awareness\config.json`:
@@ -137,7 +141,7 @@ Stored in `%APPDATA%\self-awareness\config.json`:
 | `%APPDATA%\self-awareness\daemon.pid` | Daemon PID (for TUI to stop it) |
 | `%APPDATA%\self-awareness\daemon.log` | Daemon error log |
 | `%APPDATA%\self-awareness\cleanup.bat` | Cleanup batch script |
-| `%APPDATA%\self-awareness\key.bin` | DPAPI-protected AES-256 master key |
+| `%APPDATA%\self-awareness\key.bin` | Master key. If no passphrase, contains `DPAPI(AES_KEY)`. If passphrase set, contains `DPAPI(MAGIC + SALT + NONCE + AES_GCM(DERIVED_KEY, AES_KEY) + TAG)`. |
 | Windows Task Scheduler | `SelfAwarenessStartup` and `SelfAwarenessCleanup` tasks |
 
 ## Git Workflow

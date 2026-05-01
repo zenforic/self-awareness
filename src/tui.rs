@@ -141,7 +141,7 @@ fn run_ui(
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             let _ = daemon::stop_daemon();
-                            match viewer_state.decrypt_all() {
+                            match viewer_state.decrypt_all(config) {
                                 Ok(p) => {
                                     message = Some(format!("Decrypted to {:?}", p));
                                     message_timeout = std::time::Instant::now();
@@ -207,7 +207,7 @@ fn run_ui(
                             confirm_investigate = true;
                         }
                         KeyCode::Enter => {
-                            if let Err(e) = viewer_state.open_selected() {
+                            if let Err(e) = viewer_state.open_selected(config) {
                                 message = Some(format!("Viewer error: {}", e));
                                 message_timeout = std::time::Instant::now();
                             }
@@ -320,14 +320,19 @@ fn run_ui(
                             let _ = daemon::stop_daemon();
                             
                             #[cfg(target_os = "windows")]
-                            let child = std::process::Command::new(&exe_path)
-                                .arg("--daemon")
-                                .creation_flags(0x00000008) // DETACHED_PROCESS — not attached to TUI console
-                                .spawn();
+                            let mut cmd = std::process::Command::new(&exe_path);
+                            #[cfg(target_os = "windows")]
+                            cmd.arg("--daemon").creation_flags(0x00000008);
+                            
                             #[cfg(not(target_os = "windows"))]
-                            let child = std::process::Command::new(&exe_path)
-                                .arg("--daemon")
-                                .spawn();
+                            let mut cmd = std::process::Command::new(&exe_path);
+                            #[cfg(not(target_os = "windows"))]
+                            cmd.arg("--daemon");
+                            
+                            if let Some(pass) = &config.current_passphrase {
+                                cmd.env("SAW_PASSPHRASE", pass);
+                            }
+                            let child = cmd.spawn();
 
                             match child {
                                 Ok(_child) => {
@@ -436,14 +441,19 @@ fn run_ui(
                     // Start the new daemon
                     let exe_path = std::env::current_exe().unwrap();
                     #[cfg(target_os = "windows")]
-                    let child = std::process::Command::new(&exe_path)
-                        .arg("--daemon")
-                        .creation_flags(0x00000008) // DETACHED_PROCESS
-                        .spawn();
+                    let mut cmd = std::process::Command::new(&exe_path);
+                    #[cfg(target_os = "windows")]
+                    cmd.arg("--daemon").creation_flags(0x00000008);
+                    
                     #[cfg(not(target_os = "windows"))]
-                    let child = std::process::Command::new(&exe_path)
-                        .arg("--daemon")
-                        .spawn();
+                    let mut cmd = std::process::Command::new(&exe_path);
+                    #[cfg(not(target_os = "windows"))]
+                    cmd.arg("--daemon");
+                    
+                    if let Some(pass) = &config.current_passphrase {
+                        cmd.env("SAW_PASSPHRASE", pass);
+                    }
+                    let child = cmd.spawn();
 
                     match child {
                         Ok(_child) => {
