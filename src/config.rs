@@ -14,6 +14,13 @@ pub struct Config {
     /// `true` for new configs.
     #[serde(default)]
     pub encrypt_images: bool,
+    /// Whether to embed a hash chain for tamper detection
+    #[serde(default = "default_true")]
+    pub hash_chain: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +41,7 @@ impl Default for Config {
             retention_days: 7,
             start_on_boot: false,
             encrypt_images: true,
+            hash_chain: true,
         }
     }
 }

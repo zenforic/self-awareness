@@ -8,7 +8,13 @@ use crate::crypto;
 
 /// Capture the screen using GDI BitBlt and save it to the specified directory.
 /// If `encrypt` is true, the image is encrypted with AES-256-GCM and saved as `.enc`.
-pub fn capture_and_save(output_dir: &str, format: &ImageFormat, encrypt: bool) -> Result<()> {
+pub fn capture_and_save(
+    output_dir: &str,
+    format: &ImageFormat,
+    encrypt: bool,
+    hash_chain: bool,
+    mut prev_chain_hash: Option<&mut [u8; 32]>,
+) -> Result<()> {
     std::fs::create_dir_all(output_dir)?;
 
     let (rgba, width, height) = capture_screen()?;
@@ -19,11 +25,29 @@ pub fn capture_and_save(output_dir: &str, format: &ImageFormat, encrypt: bool) -
     let now = chrono::Local::now();
     let timestamp = now.format("%Y%m%d_%H%M%S");
     let millis = now.nanosecond() / 1_000_000;
+    let timestamp_ms = now.timestamp_millis();
 
     if encrypt {
         let key = crypto::load_key()?;
         let encoded = encode_to_bytes(&dyn_img, format)?;
-        let encrypted = crypto::encrypt_image(&key, &encoded, *format)?;
+        
+        let (encrypted, new_hash) = crypto::encrypt_image(
+            &key,
+            &encoded,
+            *format,
+            if hash_chain {
+                prev_chain_hash.as_deref().map(|prev| (prev, timestamp_ms))
+            } else {
+                None
+            }
+        )?;
+        
+        if let Some(hash) = new_hash {
+            if let Some(prev) = prev_chain_hash.as_deref_mut() {
+                *prev = hash;
+            }
+        }
+        
         let filename = format!("{}_{}.{}", timestamp, millis, crypto::ENCRYPTED_EXTENSION);
         let path = Path::new(output_dir).join(filename);
         // Atomic write: write to temp file, then rename

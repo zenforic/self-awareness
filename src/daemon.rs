@@ -11,9 +11,26 @@ pub fn run(config: &Config) -> Result<()> {
     // Ensure output directory exists
     std::fs::create_dir_all(&config.output_dir)?;
 
+    let mut prev_chain_hash = if config.encrypt_images && config.hash_chain {
+        Some(crate::crypto::get_latest_chain_hash(&config.output_dir).unwrap_or_else(|_| {
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(b"self-awareness-genesis");
+            hasher.finalize().into()
+        }))
+    } else {
+        None
+    };
+
     loop {
         // Take screenshot (immediate write to disk — no data loss on shutdown)
-        if let Err(e) = crate::capture::capture_and_save(&config.output_dir, &config.image_format, config.encrypt_images) {
+        if let Err(e) = crate::capture::capture_and_save(
+            &config.output_dir,
+            &config.image_format,
+            config.encrypt_images,
+            config.hash_chain,
+            prev_chain_hash.as_mut(),
+        ) {
             log_message(&format!("Capture error: {}", e));
         }
 

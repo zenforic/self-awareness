@@ -18,6 +18,7 @@ use aes_gcm::aead::AeadInPlace;
 use aes_gcm::{KeyInit, Key, Nonce, Aes256Gcm};
 use rand::RngCore;
 use std::path::PathBuf;
+use sha2::{Sha256, Digest};
 
 use crate::config::{app_dir, ImageFormat};
 
@@ -32,9 +33,19 @@ const NONCE_OFFSET: usize = 5;
 const NONCE_LEN: usize = 12;
 /// GCM authentication tag length.
 const TAG_LEN: usize = 16;
-/// Total header size (magic + format + nonce). Everything after the ciphertext
-/// up to TAG_LEN bytes is the auth tag.
-const HEADER_LEN: usize = NONCE_OFFSET + NONCE_LEN;
+/// Chain hash length.
+const CHAIN_HASH_LEN: usize = 32;
+/// Format byte flag indicating the presence of a hash chain.
+const FLAG_HASH_CHAIN: u8 = 0x80;
+
+/// Get the expected header length based on the format byte.
+fn header_len(format_byte: u8) -> usize {
+    if (format_byte & FLAG_HASH_CHAIN) != 0 {
+        NONCE_OFFSET + NONCE_LEN + CHAIN_HASH_LEN
+    } else {
+        NONCE_OFFSET + NONCE_LEN
+    }
+}
 
 /// Format byte constants.
 const FORMAT_WEBP: u8 = 0;
@@ -202,51 +213,84 @@ fn decrypt_aes(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
 ///
 /// The format byte records which image codec was used so the viewer
 /// knows how to decode the plaintext.
-pub fn encrypt_image(key: &[u8], plaintext: &[u8], format: ImageFormat) -> Result<Vec<u8>> {
+pub fn encrypt_image(
+    key: &[u8],
+    plaintext: &[u8],
+    format: ImageFormat,
+    hash_chain_info: Option<(&[u8; 32], i64)>,
+) -> Result<(Vec<u8>, Option<[u8; 32]>)> {
     let (nonce, ciphertext) = encrypt_aes(key, plaintext)?;
 
-    let format_byte = match format {
+    let mut format_byte = match format {
         ImageFormat::Webp => FORMAT_WEBP,
         ImageFormat::Jpeg => FORMAT_JPEG,
         ImageFormat::Png => FORMAT_PNG,
     };
 
-    let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.len());
+    let mut new_chain_hash = None;
+
+    if let Some((prev_hash, timestamp_ms)) = hash_chain_info {
+        format_byte |= FLAG_HASH_CHAIN;
+        let current_file_hash = Sha256::digest(&ciphertext);
+        let mut hasher = Sha256::new();
+        hasher.update(prev_hash);
+        hasher.update(current_file_hash);
+        hasher.update(timestamp_ms.to_le_bytes());
+        let result: [u8; 32] = hasher.finalize().into();
+        new_chain_hash = Some(result);
+    }
+
+    let header_size = header_len(format_byte);
+
+    let mut out = Vec::with_capacity(header_size + ciphertext.len());
     out.extend_from_slice(&MAGIC);
     out.push(format_byte);
     out.extend_from_slice(&nonce);
+    if let Some(h) = new_chain_hash {
+        out.extend_from_slice(&h);
+    }
     out.extend_from_slice(&ciphertext);
-    Ok(out)
+    Ok((out, new_chain_hash))
 }
 
-/// Decrypt an encrypted file and return (plaintext_bytes, ImageFormat).
-///
-/// Validates the magic bytes and format byte. Returns an error if the
-/// file is not a valid self-awareness encrypted file.
-pub fn decrypt_image(key: &[u8], data: &[u8]) -> Result<(Vec<u8>, ImageFormat)> {
-    if data.len() < HEADER_LEN {
-        anyhow::bail!("Encrypted file too small ({}) — expected at least {} bytes", data.len(), HEADER_LEN);
+/// Decrypt an encrypted file and return (plaintext_bytes, ImageFormat, chain_hash).
+pub fn decrypt_image(key: &[u8], data: &[u8]) -> Result<(Vec<u8>, ImageFormat, Option<[u8; 32]>)> {
+    if data.len() < NONCE_OFFSET + NONCE_LEN {
+        anyhow::bail!("Encrypted file too small");
     }
 
-    // Validate magic
     if data[..4] != MAGIC {
         anyhow::bail!("Not a self-awareness encrypted file (bad magic bytes)");
     }
 
-    // Decode format
-    let format = match data[FORMAT_OFFSET] {
+    let raw_format = data[FORMAT_OFFSET];
+    let has_chain = (raw_format & FLAG_HASH_CHAIN) != 0;
+    let format_byte = raw_format & !FLAG_HASH_CHAIN;
+
+    let format = match format_byte {
         FORMAT_WEBP => ImageFormat::Webp,
         FORMAT_JPEG => ImageFormat::Jpeg,
         FORMAT_PNG => ImageFormat::Png,
         other => anyhow::bail!("Unknown format byte: {}", other),
     };
 
-    // Extract nonce and ciphertext
-    let nonce = &data[NONCE_OFFSET..HEADER_LEN];
-    let ciphertext = &data[HEADER_LEN..];
+    let hl = header_len(raw_format);
+    if data.len() < hl {
+        anyhow::bail!("Encrypted file too small for header");
+    }
+
+    let nonce = &data[NONCE_OFFSET .. NONCE_OFFSET + NONCE_LEN];
+    let mut chain_hash = None;
+    if has_chain {
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&data[NONCE_OFFSET + NONCE_LEN .. hl]);
+        chain_hash = Some(h);
+    }
+
+    let ciphertext = &data[hl..];
 
     let plaintext = decrypt_aes(key, nonce, ciphertext)?;
-    Ok((plaintext, format))
+    Ok((plaintext, format, chain_hash))
 }
 
 /// Detect whether a file is an encrypted self-awareness file by checking
@@ -257,3 +301,45 @@ pub fn is_encrypted_file(data: &[u8]) -> bool {
 
 /// The file extension used for encrypted images.
 pub const ENCRYPTED_EXTENSION: &str = "enc";
+
+/// Scan the output directory to find the latest valid chain hash.
+/// Returns a genesis hash if no valid encrypted files with chain hashes are found.
+pub fn get_latest_chain_hash(output_dir: &str) -> Result<[u8; 32]> {
+    let mut files = std::fs::read_dir(output_dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|p| p.extension().map(|e| e == "enc").unwrap_or(false))
+        .collect::<Vec<_>>();
+
+    files.sort_by_key(|f| {
+        f.metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    });
+
+    for file in files.into_iter().rev() {
+        let data = match std::fs::read(&file) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        
+        if !is_encrypted_file(&data) {
+            continue;
+        }
+
+        let raw_format = data[FORMAT_OFFSET];
+        let has_chain = (raw_format & FLAG_HASH_CHAIN) != 0;
+        if has_chain {
+            let hl = header_len(raw_format);
+            if data.len() >= hl {
+                let mut h = [0u8; 32];
+                h.copy_from_slice(&data[NONCE_OFFSET + NONCE_LEN .. hl]);
+                return Ok(h);
+            }
+        }
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"self-awareness-genesis");
+    Ok(hasher.finalize().into())
+}
