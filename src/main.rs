@@ -90,8 +90,20 @@ fn main() {
                 hide_console();
                 run_daemon_application();
             } else {
-                // Another instance is running — show TUI
-                run_tui_application();
+                // Mutex is held, but PID file is missing or stale.
+                // This means a zombie daemon is running! Kill it and try again.
+                let _ = daemon::stop_daemon();
+                
+                // Sleep briefly to let the zombie release the mutex
+                std::thread::sleep(std::time::Duration::from_millis(200));
+
+                if acquire_daemon_mutex() {
+                    hide_console();
+                    run_daemon_application();
+                } else {
+                    // Another instance is running and couldn't be killed — show TUI
+                    run_tui_application();
+                }
             }
         }
     }
