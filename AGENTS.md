@@ -23,6 +23,7 @@ A stealth screen-logging daemon for monitoring PC access while away. Runs invisi
 | `self-awareness.exe --tui` | Always shows TUI (reattaches if daemon running) |
 | `self-awareness.exe --daemon` | Always runs as daemon (bypasses all checks) |
 | `self-awareness.exe --set-passphrase` | CLI prompt to set, change, or remove the optional passphrase protecting the master key |
+| `self-awareness.exe --set-tui-passphrase` | CLI prompt to set a TUI-only login password |
 
 ### Startup Flow
 | Scenario | Behavior |
@@ -81,7 +82,8 @@ Stored in `%APPDATA%\self-awareness\config.json`:
   "retention_days": 7,
   "start_on_boot": false,
   "encrypt_images": true,
-  "hash_chain": true
+  "hash_chain": true,
+  "tui_passphrase_hash": null
 }
 ```
 

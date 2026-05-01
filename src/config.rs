@@ -17,6 +17,8 @@ pub struct Config {
     /// Whether to embed a hash chain for tamper detection
     #[serde(default = "default_true")]
     pub hash_chain: bool,
+    /// Argon2 password hash for TUI login, if set.
+    pub tui_passphrase_hash: Option<String>,
     #[serde(skip)]
     pub current_passphrase: Option<String>,
 }
@@ -44,6 +46,7 @@ impl Default for Config {
             start_on_boot: false,
             encrypt_images: true,
             hash_chain: true,
+            tui_passphrase_hash: None,
             current_passphrase: None,
         }
     }
