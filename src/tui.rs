@@ -224,12 +224,17 @@ fn run_ui(
                             message_timeout = std::time::Instant::now();
                         } else {
                             let exe_path = std::env::current_exe().unwrap();
+                            // Ensure no zombie daemons are holding the mutex
+                            let _ = daemon::stop_daemon();
+                            
                             #[cfg(target_os = "windows")]
                             let child = std::process::Command::new(&exe_path)
+                                .arg("--daemon")
                                 .creation_flags(0x00000008) // DETACHED_PROCESS — not attached to TUI console
                                 .spawn();
                             #[cfg(not(target_os = "windows"))]
                             let child = std::process::Command::new(&exe_path)
+                                .arg("--daemon")
                                 .spawn();
 
                             match child {
@@ -335,10 +340,12 @@ fn run_ui(
                     let exe_path = std::env::current_exe().unwrap();
                     #[cfg(target_os = "windows")]
                     let child = std::process::Command::new(&exe_path)
+                        .arg("--daemon")
                         .creation_flags(0x00000008) // DETACHED_PROCESS
                         .spawn();
                     #[cfg(not(target_os = "windows"))]
                     let child = std::process::Command::new(&exe_path)
+                        .arg("--daemon")
                         .spawn();
 
                     match child {
