@@ -7,6 +7,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["capture", "monitoring", "stealth"]
 categories = ["command-line-utilities"]
+repository = "https://github.com/zenforic/self-awareness"
 
 [dependencies]
 image = { version = "0.24", features = ["webp"] }
