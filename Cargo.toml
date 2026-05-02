@@ -34,3 +34,6 @@ rpassword = "7.5.1"
 opt-level = 3
 strip = true
 lto = true
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
