@@ -2,6 +2,11 @@
 name = "self-awareness"
 version = "0.1.1"
 edition = "2024"
+description = "A lightweight, stealth screen-logging daemon for Windows."
+readme = "README.md"
+license = "MIT"
+keywords = ["capture", "monitoring", "stealth"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 image = { version = "0.24", features = ["webp"] }
