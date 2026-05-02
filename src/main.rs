@@ -7,6 +7,8 @@ mod elevate;
 mod startup;
 mod tui;
 mod viewer;
+#[cfg(test)]
+mod tests;
 
 use std::env;
 
